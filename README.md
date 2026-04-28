@@ -1,110 +1,142 @@
-# AKTT Guild Stats - Phase 1
+# AKTT Guild Stats
 
-A SQLite-backed replacement for the spreadsheet-based weekly stats workflow.
-Phase 1 is ingest-only: the legacy spreadsheet pipeline keeps running unchanged
-while this database accumulates a clean, queryable record alongside it. Future
-phases (web app, automated upload, etc.) will read from this database.
+A SQLite-backed replacement for the spreadsheet-driven weekly stats workflow.
 
-## What it does
+The system runs alongside the legacy spreadsheet pipeline. The database
+accumulates a clean, queryable record while the spreadsheets remain authoritative
+for in-game raffle drawings (via the existing Apps Script). Once the eventual
+web UI is in place, the database becomes authoritative and the spreadsheets retire.
 
-* `backfill.py` - one-time import of the two archive workbooks (donations and
-  raffle) into the database. Covers Feb 2022 through the most recent week.
-* `ingest.py` - weekly run that takes the same `MasterMerchant.lua` and
-  `GBLData.lua` files the legacy `guild_stats.py` consumes, and writes them to
-  SQLite. Idempotent: running twice on the same export does no harm.
-* `validate.py` - sanity check that compares the ingested current-week numbers
-  against `donation_summary.csv` from the legacy pipeline. All seven fields
-  should match exactly.
+## Files
 
-## Schema overview
+| File                     | Role                                                          |
+|--------------------------|---------------------------------------------------------------|
+| `schema.sql`             | SQLite schema (idempotent; `sqlite3 db < schema.sql`)         |
+| `guildstats.py`          | Shared library: db helpers, week math, raffle/donation logic  |
+| `backfill.py`            | One-time import of donations workbook history (Phase 1)       |
+| `backfill_raffle.py`     | One-time import of standard + high-roller raffle history      |
+| `ingest.py`              | Weekly ingest from MasterMerchant.lua + GBLData.lua           |
+| `validate.py`            | Compare DB against legacy `donation_summary.csv` for sanity   |
+| `donations.py`           | CLI for mail-in donations (add / list / promote)              |
+| `entry.py`               | CLI for manual raffle entries (FISHING/EVENT/etc)             |
+| `import_winners.py`      | Pull final entries+prizes+winners from raffle xlsx after draw |
+| `_smoketest_slpp_shim.py`| Sandbox-only Lua extractor; safe to delete on the LXC         |
 
-* `weeks` - one row per trade week (ends Tuesday 19:00 UTC).
-* `users` - one row per guild account, e.g. `@jeffk42`.
-* `user_week_stats` - per-user, per-week aggregates: sales, taxes, purchases,
-  rank, total deposits, total raffle, total donations. UNIQUE on (user, week).
-* `bank_transactions` - individual guild bank transactions from `GBLData.lua`
-  (or backfilled raffle entries). UNIQUE on the game's transaction_id.
-* `ingest_runs` - audit log; one row per script invocation.
+## LXC setup
 
-`is_backfilled` columns mark rows that came from the spreadsheet history vs
-the live Lua ingest, so you can audit/reconcile later.
-
-## Setup on the Proxmox LXC
-
-A minimal Debian/Ubuntu LXC with 1 vCPU, 1 GB RAM, and 8 GB disk is plenty.
+A Debian/Ubuntu LXC with 2 vCPU, 2 GB RAM, 8 GB disk is plenty.
 
 ```bash
-apt update && apt install -y python3 python3-pip sqlite3
-pip3 install slpp openpyxl
+apt update && apt install -y python3 python3-pip python3-venv sqlite3
+python3 -m venv ~/venv && source ~/venv/bin/activate
+pip install slpp openpyxl tzdata
+```
 
-# Drop these files (and the schema) into a working directory, e.g.:
-mkdir -p /var/lib/guildstats
-cd /var/lib/guildstats
-# (copy schema.sql, guildstats.py, ingest.py, backfill.py, validate.py here)
+`tzdata` is required: the raffle-deadline math uses `ZoneInfo('US/Eastern')`,
+which fails with `'No time zone found with key US/Eastern'` on minimal Linux
+images that don't have system tzdata installed. The PyPI `tzdata` package is
+the canonical fix.
 
-# Initialize the database
+Initialize the database:
+
+```bash
 sqlite3 guildstats.db < schema.sql
 ```
 
 ## One-time backfill
 
-Copy the two archive workbooks to the LXC, then:
-
 ```bash
-python3 backfill.py \
-  --db guildstats.db \
-  --donations "AKTT Weekly Raw Data.xlsx" \
-  --raffle    "AKTT Standard Raffle.xlsx" \
-  --schema    schema.sql
+# Phase 1: weekly stats + raffle deposits from the donations workbook
+python3 backfill.py --db guildstats.db \
+    --donations "AKTT Weekly Raw Data.xlsx" \
+    --raffle    "AKTT Standard Raffle.xlsx" \
+    --schema    schema.sql
+
+# Phase 2: full raffle history (entries, prizes, winners) for both raffles
+python3 backfill_raffle.py --db guildstats.db \
+    --standard   "AKTT Standard Raffle.xlsx" \
+    --highroller "AKTT High-Roller Raffle.xlsx" \
+    --schema     schema.sql
 ```
 
-This populates ~218 weeks of `user_week_stats` and ~11k raffle transactions in
-about 20 seconds. Re-running the backfill is safe; it UPSERTs by (user, week)
-and ignores duplicate transaction IDs.
+The phase-1 backfill takes ~20 seconds; the phase-2 backfill takes ~30 seconds.
 
-## Ongoing weekly ingest
+## Weekly workflow (parallel to the legacy spreadsheet for now)
 
-Each time you do an in-game export and run the legacy `guild_stats.py`, also
-copy `MasterMerchant.lua` and `GBLData.lua` to the LXC and run:
+**Mid-week, after each in-game export.** Copy the two Lua files to the LXC, then:
 
 ```bash
-# For "this week" (mid-week snapshot):
-python3 ingest.py --db guildstats.db \
-  --mm  /path/to/MasterMerchant.lua \
-  --gbl /path/to/GBLData.lua \
-  --week this
+# Mid-week snapshot:
+python3 ingest.py --db guildstats.db --mm MasterMerchant.lua --gbl GBLData.lua --week this
 
-# For "last week" (final snapshot taken just after Tuesday rollover):
-python3 ingest.py --db guildstats.db \
-  --mm  /path/to/MasterMerchant.lua \
-  --gbl /path/to/GBLData.lua \
-  --week last
+# Just after Tuesday rollover, to capture the final snapshot of the prior week:
+python3 ingest.py --db guildstats.db --mm MasterMerchant.lua --gbl GBLData.lua --week last
 ```
 
-Idempotent: re-running the same export does no harm. The script:
+The ingest is idempotent: running it twice on the same export does no harm.
+It updates `user_week_stats`, `bank_transactions`, and creates `raffle_entries`
+for every raffle-eligible gold deposit (both standard and high-roller raffles).
 
-1. Upserts MM EXPORT data into `user_week_stats` for the target week
-2. Upserts every transaction in GBL `history` into `bank_transactions`
-   (deduped by transaction_id; GBL retains ~2 weeks of history so multiple
-   weeks may be touched on a single run)
-3. Recomputes `total_deposits`, `total_raffle`, `total_donations` for every
-   affected week from `bank_transactions`
-
-## Validating against the legacy pipeline
-
-Run both `guild_stats.py` (legacy) and `ingest.py` (new) on the same Lua
-exports, then:
+**When mail-in items arrive:**
 
 ```bash
-python3 validate.py \
-  --db guildstats.db \
-  --csv /path/to/donation_summary.csv \
-  --week this
+# Record one donation
+python3 donations.py --db guildstats.db add @user 60000 "gold mats and writs" --recorded-by @yourname
+
+# See what's pending in the current week
+python3 donations.py --db guildstats.db list
+
+# At the Tuesday rollover, promote last week's donations into the current raffle.
+# Defaults: --week current, --to-raffle current. min_value default = 10,000.
+python3 donations.py --db guildstats.db promote --to-raffle current
 ```
 
-If everything is wired up correctly, you should see all seven fields
-(rank, sales, taxes, purchases, deposits, raffle, donations) match for every
-user with no mismatches.
+**Manual entries (FISHING / EVENT / ADJUSTMENT):**
+
+```bash
+# Quick form: 5 free tickets in the current standard raffle
+python3 entry.py --db guildstats.db add @user --tickets 5 --descriptor FISHING
+
+# Explicit ticket counts
+python3 entry.py --db guildstats.db add @user --paid 25 --free 5 --hr 1 --descriptor EVENT
+
+python3 entry.py --db guildstats.db list --raffle current
+python3 entry.py --db guildstats.db remove 12345
+```
+
+**After the legacy Apps Script has drawn winners** (Friday after 8pm ET), pull
+the final entry list, prizes, and winners back into the database:
+
+```bash
+python3 import_winners.py --db guildstats.db \
+    --standard   "AKTT Standard Raffle.xlsx" \
+    --highroller "AKTT High-Roller Raffle.xlsx"
+```
+
+The Apps Script renames the just-drawn `Current` tab to `MMDDYY` and creates a
+fresh empty `Current`, so `import_winners.py` reads the latest `MMDDYY` tab by
+default. Pass `--tab 042426` to import a specific tab. This step replaces any
+manual entries and re-syncs prizes/winners; bank-deposit entries (which were
+already created at live ingest time) are deduplicated by transaction_id.
+
+## Schema overview
+
+Phase 1 tables: `users`, `weeks`, `user_week_stats`, `bank_transactions`,
+`ingest_runs`.
+
+Phase 2 tables:
+
+- `raffles` — one row per weekly drawing. Standard and high-roller for the
+  same week are two separate rows.
+- `raffle_entries` — one row per (user, raffle, source-occurrence) with
+  explicit paid / free / high-roller ticket counts. Source is one of
+  `bank_deposit`, `mail_donation`, `event`, `high_roller_qualifier`.
+- `prizes` — tiered prize list per raffle. `category` is `main` or `mini`,
+  `active_at_ticket_count` is the threshold for unlocking.
+- `raffle_winners` — one row per prize awarded.
+- `manual_donations` — mail-in items the officer has entered. The `is_promoted`
+  flag and `promoted_to_raffle_id` track whether a donation has been rolled
+  into a raffle yet.
 
 ## Useful queries
 
@@ -114,51 +146,29 @@ SELECT u.account_name, SUM(s.sales) AS lifetime_sales
   FROM user_week_stats s JOIN users u ON u.id = s.user_id
  GROUP BY u.id ORDER BY lifetime_sales DESC LIMIT 20;
 
--- Weekly guild totals
-SELECT w.ending_date,
-       SUM(s.sales)           AS sales,
-       SUM(s.taxes)           AS taxes,
-       SUM(s.total_deposits)  AS deposits,
-       SUM(s.total_raffle)    AS raffle,
-       SUM(s.total_donations) AS donations
-  FROM user_week_stats s JOIN weeks w ON w.id = s.week_id
- GROUP BY w.id ORDER BY w.ending_date DESC LIMIT 12;
+-- Raffle wins per user, all-time
+SELECT u.account_name, COUNT(*) AS wins
+  FROM raffle_winners w JOIN users u ON u.id = w.user_id
+ GROUP BY u.id ORDER BY wins DESC LIMIT 20;
 
--- Raffle entries for one user across a date range
-SELECT bt.occurred_at, bt.gold_amount, bt.gold_amount - 1 AS purchase_amount
-  FROM bank_transactions bt JOIN users u ON u.id = bt.user_id
- WHERE u.account_name = '@Sairus'
-   AND bt.transaction_type = 'dep_gold'
-   AND ((bt.gold_amount - 1) % 1000) = 0
-   AND bt.occurred_at >= '2026-01-01'
- ORDER BY bt.occurred_at;
-
--- Item donations: who's giving what
-SELECT u.account_name, bt.item_description, bt.item_count, bt.item_value,
-       bt.item_count * bt.item_value AS total_value, bt.occurred_at
-  FROM bank_transactions bt JOIN users u ON u.id = bt.user_id
- WHERE bt.transaction_type = 'dep_item'
- ORDER BY total_value DESC LIMIT 50;
+-- Tickets vs wins (rough win-rate proxy)
+WITH tix AS (
+    SELECT user_id, SUM(paid_tickets+free_tickets) AS total_tix
+      FROM raffle_entries WHERE source != 'high_roller_qualifier'
+     GROUP BY user_id
+), wins AS (
+    SELECT user_id, COUNT(*) AS wins FROM raffle_winners GROUP BY user_id
+)
+SELECT u.account_name, tix.total_tix, COALESCE(wins.wins,0) AS wins
+  FROM users u JOIN tix ON tix.user_id = u.id
+  LEFT JOIN wins ON wins.user_id = u.id
+ WHERE tix.total_tix > 100
+ ORDER BY total_tix DESC LIMIT 30;
 ```
 
-## Files in this delivery
+## What's NOT here yet
 
-| File                     | Role                                                    |
-|--------------------------|---------------------------------------------------------|
-| `schema.sql`             | SQLite schema (apply with `sqlite3 db < schema.sql`)    |
-| `guildstats.py`          | Shared library (db helpers, week math, raffle predicate)|
-| `backfill.py`            | One-time historical backfill from the two workbooks     |
-| `ingest.py`              | Ongoing weekly ingest from MM + GBL Lua exports         |
-| `validate.py`            | Compare DB against legacy `donation_summary.csv`        |
-| `_smoketest_slpp_shim.py`| Sandbox-only Lua extractor; safe to delete on the LXC   |
-
-## What's NOT here yet (future phases)
-
-* Web UI / public-facing site
-* Automatic file transfer from Windows to the LXC
-* Discord bot, scheduled cron triggers, etc.
-
-These are deliberately out of scope for phase 1. The point of phase 1 is to
-get a clean, queryable database accumulating in parallel with the existing
-spreadsheet workflow, so you can keep using what works while we build on top
-of the new foundation.
+- Web UI / public-facing site
+- Automated file transfer from Windows -> LXC
+- Automatic winner picking inside the database (Apps Script still drives that)
+- Discord bot, scheduled cron triggers

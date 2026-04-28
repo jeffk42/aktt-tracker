@@ -1,0 +1,21 @@
+# /etc/systemd/system/aktt-drop.path
+#
+# Watch /var/lib/aktt-stats/incoming/manifest.json for changes (created or
+# modified). When it appears, fire aktt-drop.service. The service is a
+# Type=oneshot, so multiple rapid arrivals coalesce safely.
+#
+# Install:
+#   sudo cp aktt-drop.path     /etc/systemd/system/
+#   sudo cp aktt-drop.service  /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now aktt-drop.path
+
+[Unit]
+Description=Watch for incoming AKTT ingest manifest
+
+[Path]
+PathChanged=/var/lib/aktt-stats/incoming/manifest.json
+Unit=aktt-drop.service
+
+[Install]
+WantedBy=multi-user.target

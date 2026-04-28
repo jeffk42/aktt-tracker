@@ -84,3 +84,98 @@ CREATE INDEX IF NOT EXISTS idx_bt_week     ON bank_transactions(week_id);
 CREATE INDEX IF NOT EXISTS idx_bt_user     ON bank_transactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_bt_occurred ON bank_transactions(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_bt_type     ON bank_transactions(transaction_type);
+
+-- =============================================================================
+-- Phase 2 additions: raffles, entries, prizes, winners, manual donations.
+-- Apply with: sqlite3 guildstats.db < schema.sql  (re-application is safe)
+-- =============================================================================
+
+-- One row per weekly drawing. Standard and high_roller for the same week are
+-- two separate rows.
+CREATE TABLE IF NOT EXISTS raffles (
+    id                  INTEGER PRIMARY KEY,
+    raffle_type         TEXT NOT NULL,                -- 'standard' | 'high_roller'
+    drawing_date        TEXT NOT NULL,                -- "YYYY-MM-DD" (Friday)
+    deadline_at         TEXT NOT NULL,                -- "YYYY-MM-DD HH:MM:SS" UTC
+    status              TEXT NOT NULL DEFAULT 'open', -- 'open' | 'closed' | 'drawn'
+    max_ticket_number   INTEGER,                      -- upper bound for drawing
+    total_tickets_sold  INTEGER,                      -- cached aggregate
+    is_backfilled       INTEGER NOT NULL DEFAULT 0,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (raffle_type, drawing_date)
+);
+
+-- One row per (user, raffle, source-occurrence). A user with two separate
+-- gold deposits gets two entries. Ticket counts are stored explicitly so
+-- historical entries preserve whatever rule was in force at the time.
+CREATE TABLE IF NOT EXISTS raffle_entries (
+    id                      INTEGER PRIMARY KEY,
+    raffle_id               INTEGER NOT NULL REFERENCES raffles(id),
+    user_id                 INTEGER NOT NULL REFERENCES users(id),
+    source                  TEXT NOT NULL,            -- 'bank_deposit' | 'mail_donation' | 'event' | 'high_roller_qualifier'
+    gold_amount             INTEGER,                  -- gold deposited or assessed donation value
+    paid_tickets            INTEGER NOT NULL DEFAULT 0,
+    free_tickets            INTEGER NOT NULL DEFAULT 0,
+    high_roller_tickets     INTEGER NOT NULL DEFAULT 0,
+    descriptor              TEXT,                     -- 'DONATION' | 'FISHING' | 'EVENT' | NULL
+    source_transaction_id   TEXT,                     -- FK by value to bank_transactions.transaction_id
+    manual_donation_id      INTEGER REFERENCES manual_donations(id),
+    occurred_at             TEXT NOT NULL,
+    start_number            INTEGER,                  -- ticket range start in this raffle
+    end_number              INTEGER,                  -- ticket range end (inclusive)
+    is_backfilled           INTEGER NOT NULL DEFAULT 0,
+    created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Tiered prize list per raffle. Prizes are awarded only if total_tickets_sold
+-- reaches active_at_ticket_count. category distinguishes main from mini.
+CREATE TABLE IF NOT EXISTS prizes (
+    id                          INTEGER PRIMARY KEY,
+    raffle_id                   INTEGER NOT NULL REFERENCES raffles(id),
+    category                    TEXT NOT NULL DEFAULT 'main',  -- 'main' | 'mini'
+    display_order               INTEGER NOT NULL,              -- 1, 2, 3... within category
+    active_at_ticket_count      INTEGER,                       -- threshold; NULL for mini
+    prize_type                  TEXT NOT NULL,                 -- 'gold' | 'item'
+    gold_amount                 INTEGER,
+    item_description            TEXT,
+    notes                       TEXT,
+    created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (raffle_id, category, display_order)
+);
+
+-- One row per prize awarded. Prize -> winner is 1:1.
+CREATE TABLE IF NOT EXISTS raffle_winners (
+    id                      INTEGER PRIMARY KEY,
+    prize_id                INTEGER NOT NULL UNIQUE REFERENCES prizes(id),
+    user_id                 INTEGER NOT NULL REFERENCES users(id),
+    winning_ticket_number   INTEGER NOT NULL,
+    drawn_at                TEXT NOT NULL DEFAULT (datetime('now')),
+    source                  TEXT NOT NULL DEFAULT 'apps_script_ingest',  -- how the winner was decided
+    notes                   TEXT
+);
+
+-- Mail-in donations the officer entered. These are independent records that
+-- can be promoted into raffle_entries via the donations CLI.
+CREATE TABLE IF NOT EXISTS manual_donations (
+    id                      INTEGER PRIMARY KEY,
+    user_id                 INTEGER NOT NULL REFERENCES users(id),
+    week_id                 INTEGER NOT NULL REFERENCES weeks(id),
+    value                   INTEGER NOT NULL,
+    description             TEXT,
+    received_at             TEXT,
+    recorded_by             TEXT,
+    promoted_to_raffle_id   INTEGER REFERENCES raffles(id),
+    is_promoted             INTEGER NOT NULL DEFAULT 0,
+    created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_raffles_drawing      ON raffles(drawing_date);
+CREATE INDEX IF NOT EXISTS idx_raffles_type_date    ON raffles(raffle_type, drawing_date);
+CREATE INDEX IF NOT EXISTS idx_re_raffle            ON raffle_entries(raffle_id);
+CREATE INDEX IF NOT EXISTS idx_re_user              ON raffle_entries(user_id);
+CREATE INDEX IF NOT EXISTS idx_re_source            ON raffle_entries(source);
+CREATE INDEX IF NOT EXISTS idx_re_txid              ON raffle_entries(source_transaction_id);
+CREATE INDEX IF NOT EXISTS idx_prizes_raffle        ON prizes(raffle_id);
+CREATE INDEX IF NOT EXISTS idx_winners_user         ON raffle_winners(user_id);
+CREATE INDEX IF NOT EXISTS idx_md_user              ON manual_donations(user_id);
+CREATE INDEX IF NOT EXISTS idx_md_unpromoted        ON manual_donations(is_promoted) WHERE is_promoted = 0;

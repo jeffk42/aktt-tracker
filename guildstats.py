@@ -22,6 +22,14 @@ TRADE_WEEK_HOUR = 19          # UTC
 # Default raffle rules (matching guild_stats.py at the time this was written).
 RAFFLE_TICKET_PRICE = 1000
 RAFFLE_DEPOSIT_MODIFIER = 1
+RAFFLE_HIGH_ROLLER_PRICE = 50000   # gold per HR ticket
+RAFFLE_BUNDLE_PAID = 25            # paid tickets per bundle
+RAFFLE_BUNDLE_FREE = 5             # free tickets per bundle (current rule)
+DONATION_TICKET_PRICE = 2000       # gold value per free ticket on donations
+DONATION_MIN_VALUE = 10000         # minimum mail-in value to grant raffle entry
+RAFFLE_DEADLINE_DOW = 4            # Friday (Mon=0)
+RAFFLE_DEADLINE_HOUR_LOCAL = 20    # 8pm in raffle timezone
+RAFFLE_TIMEZONE = "US/Eastern"
 
 
 def open_db(path: str | Path) -> sqlite3.Connection:
@@ -267,3 +275,318 @@ def ingest_run(conn: sqlite3.Connection, source: str, **fields):
             (counts["rows_inserted"], counts["rows_updated"],
              counts["rows_skipped"], counts.get("notes"), run_id),
         )
+
+
+# =============================================================================
+# Phase 2: raffles, raffle entries, prizes, winners, manual donations
+# =============================================================================
+
+from datetime import time as _time
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
+
+def raffle_deadline_utc(drawing_date: "datetime|date|str") -> datetime:
+    """Given a Friday drawing date (date, datetime, or 'YYYY-MM-DD' string),
+    return the deadline datetime in UTC (Friday 20:00 ET, DST-aware)."""
+    if isinstance(drawing_date, str):
+        drawing_date = datetime.strptime(drawing_date, "%Y-%m-%d").date()
+    elif isinstance(drawing_date, datetime):
+        drawing_date = drawing_date.date()
+    if ZoneInfo is None:
+        # Fallback: assume UTC-4 (EDT). Used only on environments without zoneinfo.
+        local = datetime.combine(drawing_date, _time(RAFFLE_DEADLINE_HOUR_LOCAL, 0, 0))
+        return (local + timedelta(hours=4)).replace(tzinfo=timezone.utc)
+    local = datetime.combine(
+        drawing_date, _time(RAFFLE_DEADLINE_HOUR_LOCAL, 0, 0),
+        tzinfo=ZoneInfo(RAFFLE_TIMEZONE),
+    )
+    return local.astimezone(timezone.utc)
+
+
+def raffle_drawing_date_for(at: datetime) -> "date":
+    """Given a UTC datetime, return the date of the Friday that ENDS the raffle
+    week containing `at` (i.e. the next Friday 8pm ET on or after `at`)."""
+    if at.tzinfo is None:
+        raise ValueError("raffle_drawing_date_for requires tz-aware datetime")
+    # Walk forward day by day; cheap and correct
+    if ZoneInfo is None:
+        local = at.astimezone(timezone.utc)
+    else:
+        local = at.astimezone(ZoneInfo(RAFFLE_TIMEZONE))
+    days_ahead = (RAFFLE_DEADLINE_DOW - local.weekday()) % 7
+    candidate_date = (local + timedelta(days=days_ahead)).date()
+    candidate_deadline = raffle_deadline_utc(candidate_date)
+    if at <= candidate_deadline:
+        return candidate_date
+    # Already past this Friday's deadline; use next Friday
+    return (local + timedelta(days=days_ahead + 7)).date()
+
+
+def compute_paid_free_hr(gold_amount: int) -> tuple[int, int, int]:
+    """Apply current rules to a gold deposit (NOT including the +1 modifier).
+    Returns (paid_tickets, free_tickets, high_roller_tickets).
+
+    paid  = floor((gold-1)/1000)            # the +1 marks raffle intent
+    free  = floor(paid / 25) * 5            # "Buy 25 Get 5 Free"
+    HR    = floor((gold-1) / 50000)
+    """
+    if gold_amount is None or gold_amount <= 0:
+        return 0, 0, 0
+    purchase = gold_amount - RAFFLE_DEPOSIT_MODIFIER
+    paid = purchase // RAFFLE_TICKET_PRICE
+    free = (paid // RAFFLE_BUNDLE_PAID) * RAFFLE_BUNDLE_FREE
+    hr = purchase // RAFFLE_HIGH_ROLLER_PRICE
+    return paid, free, hr
+
+
+def compute_donation_free_tickets(value: int) -> int:
+    """Item donation: tickets = FLOOR(value / 2000). All counted as free tickets;
+    no contribution to paid or high_roller tickets."""
+    if value is None or value <= 0:
+        return 0
+    return value // DONATION_TICKET_PRICE
+
+
+# --- raffle table helpers ----------------------------------------------------
+
+def upsert_raffle(conn: sqlite3.Connection,
+                  raffle_type: str,
+                  drawing_date,
+                  status: str = "open",
+                  is_backfilled: bool = False) -> int:
+    """Get-or-create a raffle row. drawing_date can be date/datetime/str."""
+    if isinstance(drawing_date, datetime):
+        drawing_date = drawing_date.date()
+    if not isinstance(drawing_date, str):
+        drawing_date_str = drawing_date.isoformat()
+    else:
+        drawing_date_str = drawing_date
+    deadline = raffle_deadline_utc(drawing_date_str)
+    deadline_str = deadline.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    row = conn.execute(
+        """
+        INSERT INTO raffles (raffle_type, drawing_date, deadline_at, status, is_backfilled)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(raffle_type, drawing_date) DO UPDATE SET
+            deadline_at = excluded.deadline_at
+        RETURNING id
+        """,
+        (raffle_type, drawing_date_str, deadline_str, status, 1 if is_backfilled else 0),
+    ).fetchone()
+    return row["id"]
+
+
+def find_open_raffle(conn: sqlite3.Connection, raffle_type: str = "standard") -> Optional[int]:
+    """Return the id of the open raffle of the given type, or None."""
+    row = conn.execute(
+        "SELECT id FROM raffles WHERE raffle_type = ? AND status = 'open' "
+        "ORDER BY drawing_date ASC LIMIT 1",
+        (raffle_type,),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def ensure_open_raffle(conn: sqlite3.Connection,
+                       at: datetime,
+                       raffle_type: str = "standard") -> int:
+    """Find or create the open raffle of the given type that should hold a
+    transaction occurring at `at` (UTC datetime)."""
+    drawing_date = raffle_drawing_date_for(at)
+    return upsert_raffle(conn, raffle_type, drawing_date, status="open")
+
+
+# --- raffle entry helpers ----------------------------------------------------
+
+@dataclass
+class RaffleEntry:
+    raffle_id: int
+    user_id: int
+    source: str                     # bank_deposit | mail_donation | event | high_roller_qualifier
+    occurred_at: datetime
+    gold_amount: Optional[int] = None
+    paid_tickets: int = 0
+    free_tickets: int = 0
+    high_roller_tickets: int = 0
+    descriptor: Optional[str] = None
+    source_transaction_id: Optional[str] = None
+    manual_donation_id: Optional[int] = None
+    start_number: Optional[int] = None
+    end_number: Optional[int] = None
+    is_backfilled: bool = False
+
+
+def insert_raffle_entry(conn: sqlite3.Connection, e: RaffleEntry) -> int:
+    """Insert a raffle entry. For idempotency in live ingest, we de-duplicate on
+    (raffle_id, source_transaction_id) when source_transaction_id is set."""
+    occurred_str = e.occurred_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    if e.source_transaction_id:
+        # Skip if already present for this raffle+transaction
+        existing = conn.execute(
+            "SELECT id FROM raffle_entries WHERE raffle_id=? AND source_transaction_id=?",
+            (e.raffle_id, e.source_transaction_id),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+    cur = conn.execute(
+        """
+        INSERT INTO raffle_entries
+            (raffle_id, user_id, source, gold_amount, paid_tickets, free_tickets,
+             high_roller_tickets, descriptor, source_transaction_id, manual_donation_id,
+             occurred_at, start_number, end_number, is_backfilled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (e.raffle_id, e.user_id, e.source, e.gold_amount,
+         e.paid_tickets, e.free_tickets, e.high_roller_tickets,
+         e.descriptor, e.source_transaction_id, e.manual_donation_id,
+         occurred_str, e.start_number, e.end_number,
+         1 if e.is_backfilled else 0),
+    )
+    return cur.lastrowid
+
+
+def recompute_raffle_totals(conn: sqlite3.Connection, raffle_id: int) -> None:
+    """Update raffle.max_ticket_number and total_tickets_sold based on entries.
+
+    max_ticket_number = max(end_number) — upper bound for random.org range,
+    includes paid + free + donation tickets.
+
+    total_tickets_sold = sum(paid_tickets) — matches the spreadsheet semantics
+    where prize-unlock thresholds compare against paid tickets only.
+    For HR raffles paid_tickets is the HR ticket count, so the same SUM works.
+    """
+    row = conn.execute(
+        """
+        SELECT MAX(end_number) AS max_end,
+               COALESCE(SUM(paid_tickets), 0) AS total_paid
+        FROM raffle_entries WHERE raffle_id = ?
+        """,
+        (raffle_id,),
+    ).fetchone()
+    conn.execute(
+        "UPDATE raffles SET max_ticket_number=?, total_tickets_sold=? WHERE id=?",
+        (row["max_end"], row["total_paid"], raffle_id),
+    )
+
+
+# --- prizes ------------------------------------------------------------------
+
+@dataclass
+class Prize:
+    raffle_id: int
+    category: str           # 'main' | 'mini'
+    display_order: int
+    prize_type: str         # 'gold' | 'item'
+    active_at_ticket_count: Optional[int] = None
+    gold_amount: Optional[int] = None
+    item_description: Optional[str] = None
+    notes: Optional[str] = None
+
+
+def upsert_prize(conn: sqlite3.Connection, p: Prize) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO prizes
+            (raffle_id, category, display_order, active_at_ticket_count,
+             prize_type, gold_amount, item_description, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(raffle_id, category, display_order) DO UPDATE SET
+            active_at_ticket_count = excluded.active_at_ticket_count,
+            prize_type             = excluded.prize_type,
+            gold_amount            = excluded.gold_amount,
+            item_description       = excluded.item_description,
+            notes                  = excluded.notes
+        RETURNING id
+        """,
+        (p.raffle_id, p.category, p.display_order, p.active_at_ticket_count,
+         p.prize_type, p.gold_amount, p.item_description, p.notes),
+    )
+    return cur.fetchone()["id"]
+
+
+# --- winners -----------------------------------------------------------------
+
+def upsert_winner(conn: sqlite3.Connection, prize_id: int, user_id: int,
+                  winning_ticket_number: Optional[int],
+                  source: str = "apps_script_ingest",
+                  notes: Optional[str] = None) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO raffle_winners
+            (prize_id, user_id, winning_ticket_number, source, notes)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(prize_id) DO UPDATE SET
+            user_id               = excluded.user_id,
+            winning_ticket_number = excluded.winning_ticket_number,
+            source                = excluded.source,
+            notes                 = excluded.notes
+        RETURNING id
+        """,
+        (prize_id, user_id, winning_ticket_number, source, notes),
+    )
+    return cur.fetchone()["id"]
+
+
+# --- manual donations --------------------------------------------------------
+
+def add_manual_donation(conn: sqlite3.Connection, user_id: int, week_id: int,
+                        value: int, description: Optional[str] = None,
+                        received_at: Optional[datetime] = None,
+                        recorded_by: Optional[str] = None) -> int:
+    """Record a mail-in donation. Returns manual_donations.id."""
+    if received_at is None:
+        received_at = datetime.now(timezone.utc)
+    received_str = received_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    cur = conn.execute(
+        """
+        INSERT INTO manual_donations (user_id, week_id, value, description,
+                                      received_at, recorded_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, week_id, value, description, received_str, recorded_by),
+    )
+    return cur.lastrowid
+
+
+def promote_donations_to_raffle(conn: sqlite3.Connection,
+                                week_id: int,
+                                raffle_id: int,
+                                min_value: int = DONATION_MIN_VALUE) -> int:
+    """Promote unpromoted manual_donations from `week_id` into raffle_entries
+    on `raffle_id`. Returns count promoted. Aggregates per user (one entry
+    per user with summed value and ticket count, matching legacy behavior)."""
+    rows = conn.execute(
+        """
+        SELECT user_id, SUM(value) AS total_value,
+               GROUP_CONCAT(id) AS donation_ids,
+               MIN(received_at) AS earliest
+          FROM manual_donations
+         WHERE week_id = ? AND is_promoted = 0
+         GROUP BY user_id
+         HAVING SUM(value) > ?
+        """,
+        (week_id, min_value),
+    ).fetchall()
+    promoted = 0
+    for r in rows:
+        free = compute_donation_free_tickets(r["total_value"])
+        occurred = datetime.strptime(r["earliest"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        # Use the FIRST donation row's id as the manual_donation_id link
+        first_id = int(r["donation_ids"].split(",")[0])
+        e = RaffleEntry(
+            raffle_id=raffle_id, user_id=r["user_id"], source="mail_donation",
+            occurred_at=occurred, gold_amount=r["total_value"],
+            paid_tickets=0, free_tickets=free, high_roller_tickets=0,
+            descriptor="DONATION", manual_donation_id=first_id,
+        )
+        insert_raffle_entry(conn, e)
+        # Mark all source donations as promoted
+        conn.execute(
+            "UPDATE manual_donations SET is_promoted=1, promoted_to_raffle_id=? "
+            "WHERE id IN (" + r["donation_ids"] + ")",
+            (raffle_id,),
+        )
+        promoted += 1
+    return promoted

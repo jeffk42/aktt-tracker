@@ -1,0 +1,20 @@
+# /etc/systemd/system/aktt-drop.service
+#
+# Triggered by aktt-drop.path. Runs the processor which reads the manifest,
+# invokes ingest.py, and archives or quarantines the input files.
+
+[Unit]
+Description=Process incoming AKTT ingest drop
+After=network.target
+
+[Service]
+Type=oneshot
+User=akttuser
+Group=akttuser
+WorkingDirectory=/home/akttuser/aktt-tracker
+ExecStart=/home/akttuser/venv/bin/python3 /home/akttuser/aktt-tracker/automation/process_drop.py
+StandardOutput=journal
+StandardError=journal
+# Optional: override paths via env if your layout differs
+# Environment=AKTT_APP_DIR=/home/akttuser/aktt-tracker
+# Environment=AKTT_DB=/home/akttuser/aktt-tracker/guildstats.db

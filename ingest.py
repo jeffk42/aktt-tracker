@@ -25,6 +25,8 @@ from guildstats import (
     open_db, apply_schema,
     upsert_user, upsert_week, upsert_user_week_stats, upsert_bank_transaction,
     recompute_week_totals, ingest_run, trade_week_ending, WeekStats, BankTxn,
+    compute_paid_free_hr, ensure_open_raffle, insert_raffle_entry,
+    recompute_raffle_totals, raffle_drawing_date_for, RaffleEntry,
 )
 
 # --- configuration matching the existing guild_stats.py ---------------------
@@ -195,6 +197,54 @@ def run(db_path: str, mm_path: str, gbl_path: str, week_param: str, schema_path:
                 else:
                     gbl_skipped += 1
             print(f"GBL: {gbl_inserted} new transactions, {gbl_skipped} skipped (already-present or excluded)")
+
+            # 2b. Raffle entries: every raffle-eligible bank_transaction in the
+            # affected weeks gets a raffle_entries row in the appropriate
+            # standard (and HR) raffle. insert_raffle_entry dedupes by
+            # (raffle_id, source_transaction_id), so this is idempotent.
+            re_inserted = 0
+            re_affected_raffles: set[int] = set()
+            week_clause = "(" + ",".join(str(w) for w in affected_weeks) + ")"
+            elig_rows = conn.execute(
+                "SELECT bt.transaction_id, bt.user_id, bt.gold_amount, bt.occurred_at "
+                "  FROM bank_transactions bt "
+                " WHERE bt.transaction_type = 'dep_gold' "
+                "   AND bt.week_id IN " + week_clause + " "
+                "   AND ((bt.gold_amount - 1) % 1000) = 0 "
+                "   AND bt.gold_amount > 1 "
+                "   AND NOT EXISTS (SELECT 1 FROM raffle_entries re "
+                "                    WHERE re.source_transaction_id = bt.transaction_id "
+                "                      AND re.source = 'bank_deposit')"
+            ).fetchall()
+            for r in elig_rows:
+                gold = r["gold_amount"]
+                paid, free, hr = compute_paid_free_hr(gold)
+                if paid <= 0 and hr <= 0:
+                    continue
+                occurred = datetime.strptime(r["occurred_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                # Standard raffle entry
+                std_id = ensure_open_raffle(conn, at=occurred, raffle_type="standard")
+                insert_raffle_entry(conn, RaffleEntry(
+                    raffle_id=std_id, user_id=r["user_id"], source="bank_deposit",
+                    occurred_at=occurred, gold_amount=gold,
+                    paid_tickets=paid, free_tickets=free, high_roller_tickets=hr,
+                    source_transaction_id=r["transaction_id"], is_backfilled=False,
+                ))
+                re_affected_raffles.add(std_id)
+                # High-roller raffle entry, only if HR tickets earned
+                if hr > 0:
+                    hr_id = ensure_open_raffle(conn, at=occurred, raffle_type="high_roller")
+                    insert_raffle_entry(conn, RaffleEntry(
+                        raffle_id=hr_id, user_id=r["user_id"], source="high_roller_qualifier",
+                        occurred_at=occurred, gold_amount=gold,
+                        paid_tickets=hr, free_tickets=0, high_roller_tickets=hr,
+                        source_transaction_id=r["transaction_id"], is_backfilled=False,
+                    ))
+                    re_affected_raffles.add(hr_id)
+                re_inserted += 1
+            for rid in re_affected_raffles:
+                recompute_raffle_totals(conn, rid)
+            print(f"Raffle entries: {re_inserted} new bank_deposit entries across {len(re_affected_raffles)} raffles")
 
             # 3. Recompute aggregate totals for every affected week.
             # This makes deposit/raffle/donation totals reflect the transactions
