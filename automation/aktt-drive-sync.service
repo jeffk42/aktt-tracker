@@ -1,0 +1,21 @@
+# /etc/systemd/system/aktt-drive-sync.service
+#
+# Triggered by aktt-drive-sync.timer (every 30 min by default). Pulls the
+# donations workbook and both raffle workbooks from Google Drive and syncs
+# their state into the database.
+
+[Unit]
+Description=Pull AKTT spreadsheets from Drive into the database
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=akttuser
+Group=akttuser
+WorkingDirectory=/home/akttuser/aktt-tracker
+EnvironmentFile=/etc/aktt/drive-sync.env
+ExecStart=/home/akttuser/venv/bin/python3 /home/akttuser/aktt-tracker/donations.py --db ${AKTT_DB} import-from-sheet
+ExecStart=/home/akttuser/venv/bin/python3 /home/akttuser/aktt-tracker/sync_from_drive.py --db ${AKTT_DB}
+StandardOutput=journal
+StandardError=journal

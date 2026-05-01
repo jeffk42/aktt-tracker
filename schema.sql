@@ -179,3 +179,15 @@ CREATE INDEX IF NOT EXISTS idx_prizes_raffle        ON prizes(raffle_id);
 CREATE INDEX IF NOT EXISTS idx_winners_user         ON raffle_winners(user_id);
 CREATE INDEX IF NOT EXISTS idx_md_user              ON manual_donations(user_id);
 CREATE INDEX IF NOT EXISTS idx_md_unpromoted        ON manual_donations(is_promoted) WHERE is_promoted = 0;
+
+-- =============================================================================
+-- Phase 2.5b additions: Drive integration support for manual_donations.
+-- =============================================================================
+
+-- 'source' lets us distinguish CLI-entered donations from sheet-imported ones,
+-- so the sheet importer can refresh its own rows without touching CLI entries.
+-- 'sheet_row_hash' is a content hash used by the sheet importer for idempotency.
+ALTER TABLE manual_donations ADD COLUMN source        TEXT NOT NULL DEFAULT 'cli';
+ALTER TABLE manual_donations ADD COLUMN sheet_row_hash TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_md_source_week ON manual_donations(source, week_id);

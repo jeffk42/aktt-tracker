@@ -1,0 +1,17 @@
+# /etc/systemd/system/aktt-drive-sync.timer
+#
+# Run aktt-drive-sync.service every 30 minutes. Adjust OnUnitActiveSec to
+# taste; nothing breaks if you make it more or less frequent.
+
+[Unit]
+Description=Periodic Drive sync for AKTT
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+RandomizedDelaySec=2min
+Unit=aktt-drive-sync.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -554,39 +554,77 @@ def promote_donations_to_raffle(conn: sqlite3.Connection,
                                 week_id: int,
                                 raffle_id: int,
                                 min_value: int = DONATION_MIN_VALUE) -> int:
-    """Promote unpromoted manual_donations from `week_id` into raffle_entries
-    on `raffle_id`. Returns count promoted. Aggregates per user (one entry
-    per user with summed value and ticket count, matching legacy behavior)."""
+    """Promote a week's donations into a raffle as DONATION entries, mirroring
+    the legacy Apps Script's Tuesday-rollover behavior:
+
+        per user: total = sum(unpromoted manual_donations) + sum(bank dep_item value*count)
+        if total > min_value:
+            create one raffle_entries row with FLOOR(total/2000) free tickets
+            mark the manual_donations rows as promoted
+
+    Bank item donations are not "consumed" - they always count toward the next
+    week's promote. Idempotency comes from a synthetic source_transaction_id
+    of the form 'donation:week<n>:user<m>', so re-running the promote on the
+    same week is a no-op (insert_raffle_entry dedups by that key).
+
+    Returns the count of users promoted (i.e. raffle_entries rows created or
+    updated)."""
     rows = conn.execute(
         """
-        SELECT user_id, SUM(value) AS total_value,
-               GROUP_CONCAT(id) AS donation_ids,
-               MIN(received_at) AS earliest
-          FROM manual_donations
-         WHERE week_id = ? AND is_promoted = 0
-         GROUP BY user_id
-         HAVING SUM(value) > ?
+        WITH md AS (
+            SELECT user_id,
+                   SUM(value) AS mail_value,
+                   GROUP_CONCAT(id) AS donation_ids,
+                   MIN(received_at) AS earliest
+              FROM manual_donations
+             WHERE week_id = ? AND is_promoted = 0
+             GROUP BY user_id
+        ),
+        bt AS (
+            SELECT user_id,
+                   SUM(item_value * COALESCE(item_count, 0)) AS item_value
+              FROM bank_transactions
+             WHERE week_id = ? AND transaction_type = 'dep_item'
+               AND item_value IS NOT NULL
+             GROUP BY user_id
+        )
+        SELECT u.id AS user_id,
+               COALESCE(md.mail_value, 0)  AS mail_value,
+               COALESCE(bt.item_value, 0)  AS item_value,
+               COALESCE(md.mail_value, 0) + COALESCE(bt.item_value, 0) AS total_value,
+               md.donation_ids,
+               md.earliest
+          FROM users u
+          LEFT JOIN md ON md.user_id = u.id
+          LEFT JOIN bt ON bt.user_id = u.id
+         WHERE (COALESCE(md.mail_value, 0) + COALESCE(bt.item_value, 0)) > ?
         """,
-        (week_id, min_value),
+        (week_id, week_id, min_value),
     ).fetchall()
     promoted = 0
     for r in rows:
-        free = compute_donation_free_tickets(r["total_value"])
-        occurred = datetime.strptime(r["earliest"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        # Use the FIRST donation row's id as the manual_donation_id link
-        first_id = int(r["donation_ids"].split(",")[0])
+        total = r["total_value"]
+        free = compute_donation_free_tickets(total)
+        if r["earliest"]:
+            occurred = datetime.strptime(r["earliest"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        else:
+            # No mail-in donation; use "now" as the proxy timestamp
+            occurred = datetime.now(timezone.utc)
+        first_id = int(r["donation_ids"].split(",")[0]) if r["donation_ids"] else None
+        synthetic_txid = f"donation:week{week_id}:user{r['user_id']}"
         e = RaffleEntry(
             raffle_id=raffle_id, user_id=r["user_id"], source="mail_donation",
-            occurred_at=occurred, gold_amount=r["total_value"],
+            occurred_at=occurred, gold_amount=total,
             paid_tickets=0, free_tickets=free, high_roller_tickets=0,
             descriptor="DONATION", manual_donation_id=first_id,
+            source_transaction_id=synthetic_txid,
         )
         insert_raffle_entry(conn, e)
-        # Mark all source donations as promoted
-        conn.execute(
-            "UPDATE manual_donations SET is_promoted=1, promoted_to_raffle_id=? "
-            "WHERE id IN (" + r["donation_ids"] + ")",
-            (raffle_id,),
-        )
+        if r["donation_ids"]:
+            conn.execute(
+                "UPDATE manual_donations SET is_promoted=1, promoted_to_raffle_id=? "
+                "WHERE id IN (" + r["donation_ids"] + ")",
+                (raffle_id,),
+            )
         promoted += 1
     return promoted
