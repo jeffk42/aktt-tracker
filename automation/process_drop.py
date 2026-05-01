@@ -23,7 +23,7 @@ INCOMING_DIR = Path(os.environ.get("AKTT_INCOMING",  "/var/lib/aktt-stats/incomi
 PROCESSED_DIR= Path(os.environ.get("AKTT_PROCESSED", "/var/lib/aktt-stats/processed"))
 FAILED_DIR   = Path(os.environ.get("AKTT_FAILED",    "/var/lib/aktt-stats/failed"))
 DB_PATH      = Path(os.environ.get("AKTT_DB",        APP_DIR / "guildstats.db"))
-PYTHON_BIN   = Path(os.environ.get("AKTT_PYTHON",    "/home/akttuser/venv/bin/python3"))
+PYTHON_BIN   = Path(os.environ.get("AKTT_PYTHON",    APP_DIR / "venv/bin/python3"))
 
 
 def main() -> int:
