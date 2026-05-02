@@ -628,3 +628,41 @@ def promote_donations_to_raffle(conn: sqlite3.Connection,
             )
         promoted += 1
     return promoted
+
+
+# --- guild traders -----------------------------------------------------------
+
+@dataclass
+class TraderBid:
+    week_id: int
+    trader_name: str
+    location: Optional[str] = None
+    bid_amount: int = 0
+    notes: Optional[str] = None
+
+
+def upsert_trader_bid(conn: sqlite3.Connection, t: TraderBid) -> str:
+    """Insert or update a guild_traders row keyed by week_id."""
+    cur = conn.execute(
+        """
+        INSERT INTO guild_traders
+            (week_id, trader_name, location, bid_amount, notes, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(week_id) DO UPDATE SET
+            trader_name = excluded.trader_name,
+            location    = excluded.location,
+            bid_amount  = excluded.bid_amount,
+            notes       = excluded.notes,
+            updated_at  = datetime('now')
+        """,
+        (t.week_id, t.trader_name, t.location, t.bid_amount, t.notes),
+    )
+    return "upserted"
+
+
+def delete_trader_bid(conn: sqlite3.Connection, week_id: int) -> int:
+    """Delete a guild_traders row (e.g. to mark a week as 'no trader won').
+    Returns the number of rows removed."""
+    cur = conn.execute("DELETE FROM guild_traders WHERE week_id = ?", (week_id,))
+    return cur.rowcount
+

@@ -191,3 +191,29 @@ ALTER TABLE manual_donations ADD COLUMN source        TEXT NOT NULL DEFAULT 'cli
 ALTER TABLE manual_donations ADD COLUMN sheet_row_hash TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_md_source_week ON manual_donations(source, week_id);
+
+-- =============================================================================
+-- Phase 2.5c: weekly guild trader bids
+-- =============================================================================
+
+-- One row per trade week WHERE THE GUILD WON A TRADER.
+-- Weeks with no winning bid simply have no row here; a LEFT JOIN to weeks
+-- reveals the gaps.
+--
+-- We track only the winning bid (per the user request) - losing bids are not
+-- stored. trader_name + location are denormalized text rather than a lookup
+-- table; the set of ESO traders changes rarely enough that normalizing
+-- doesn't earn its keep, and the UI can group by name for "weeks at this
+-- trader" stats.
+CREATE TABLE IF NOT EXISTS guild_traders (
+    id            INTEGER PRIMARY KEY,
+    week_id       INTEGER NOT NULL UNIQUE REFERENCES weeks(id),
+    trader_name   TEXT NOT NULL,         -- NPC name (e.g. "Faillaure Leleu")
+    location      TEXT,                  -- where the NPC is (e.g. "Wayrest, Stormhaven")
+    bid_amount    INTEGER NOT NULL,      -- winning bid in gold
+    notes         TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_guild_traders_name ON guild_traders(trader_name);
