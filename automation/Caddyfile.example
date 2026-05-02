@@ -1,0 +1,26 @@
+# /etc/caddy/Caddyfile (or /etc/caddy/conf.d/aktt.caddy)
+#
+# Caddy autoconfigures TLS via Let's Encrypt when you point a real domain
+# at the LXC. For local-network testing without TLS, use ":80" instead of
+# the domain name.
+
+aktt.info {
+    reverse_proxy 127.0.0.1:8000
+
+    # Standard hardening
+    header {
+        Strict-Transport-Security "max-age=31536000;"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Cache the static assets aggressively (CSS, etc.)
+    @static path /static/*
+    header @static Cache-Control "public, max-age=86400"
+
+    log {
+        output file /var/log/caddy/aktt.log
+        format console
+    }
+}

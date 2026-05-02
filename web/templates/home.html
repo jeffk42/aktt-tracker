@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · {{ site_title }}{% endblock %}
+{% block content %}
+<section class="cards">
+  <div class="card">
+    <h3 class="card-title">Current Trader</h3>
+    {% if trader %}
+      <p class="big">{{ trader.trader_name }}</p>
+      <p class="muted">{{ trader.location }}</p>
+    {% else %}
+      <p class="big muted">No trader this week</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h3 class="card-title">Time to Rollover</h3>
+    <p class="big">{{ time_remaining }}</p>
+    <p class="muted">{{ current_week_ending.strftime('%a %b %-d, %H:%M UTC') }}</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">Active Members</h3>
+    <p class="big">{{ active_members }} <span class="muted small">/ {{ total_members }}</span></p>
+    <p class="muted">contributed this week</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">Weekly Goal</h3>
+    <p class="big">{{ weekly_goal | gold }}</p>
+    <p class="muted">per active member</p>
+  </div>
+</section>
+
+<section class="grid two">
+  <div class="panel">
+    <h3>Top Sellers This Week</h3>
+    {% if top_sellers %}
+    <ol class="ranked">
+      {% for r in top_sellers %}
+      <li><a href="/u/{{ r.account_name }}">{{ r.account_name }}</a>
+          <span class="muted">{{ r.sales | gold }}</span></li>
+      {% endfor %}
+    </ol>
+    {% else %}<p class="muted">No data yet for this week.</p>{% endif %}
+  </div>
+  <div class="panel">
+    <h3>Top Buyers This Week</h3>
+    {% if top_buyers %}
+    <ol class="ranked">
+      {% for r in top_buyers %}
+      <li><a href="/u/{{ r.account_name }}">{{ r.account_name }}</a>
+          <span class="muted">{{ r.purchases | gold }}</span></li>
+      {% endfor %}
+    </ol>
+    {% else %}<p class="muted">No data yet for this week.</p>{% endif %}
+  </div>
+</section>
+
+<section class="grid two">
+  <div class="panel wide">
+    <h3>Top Contributors This Week</h3>
+    {% if top_donors %}
+    <ol class="ranked">
+      {% for r in top_donors %}
+      <li><a href="/u/{{ r.account_name }}">{{ r.account_name }}</a>
+          <span class="muted">{{ r.contrib | gold }}</span></li>
+      {% endfor %}
+    </ol>
+    <p class="muted small">Contributions = bank deposits + item donations + raffle purchases</p>
+    {% else %}<p class="muted">No data yet for this week.</p>{% endif %}
+  </div>
+</section>
+
+<section>
+  <p class="muted">Looking for someone? Use the search box at the top, or visit <code>/u/@username</code> directly.</p>
+</section>
+{% endblock %}

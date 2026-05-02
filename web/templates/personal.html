@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}{{ user.account_name }} · Personal Stats{% endblock %}
+{% block content %}
+
+<header class="page-header">
+  <h1>{{ user.account_name }}</h1>
+  <p class="muted">{{ lifetime.weeks_active }} weeks active · all-time stats below</p>
+</header>
+
+<section class="cards">
+  <div class="card">
+    <h3 class="card-title">Lifetime Sales</h3>
+    <p class="big">{{ lifetime.sales | gold }}</p>
+    <p class="muted">{{ lifetime.taxes | gold }} paid in taxes</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">Lifetime Contribution</h3>
+    <p class="big">{{ lifetime.contribution | gold }}</p>
+    <p class="muted">taxes + deposits + raffle + donations</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">Lifetime Purchases</h3>
+    <p class="big">{{ lifetime.purchases | gold }}</p>
+    <p class="muted">spent at the guild trader</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">Lifetime Raffle Spend</h3>
+    <p class="big">{{ lifetime.raffle | gold }}</p>
+    <p class="muted">{{ lifetime.donations | gold }} item donations</p>
+  </div>
+</section>
+
+{% if current_week %}
+<section class="panel">
+  <h3>This Week So Far</h3>
+  <div class="cards">
+    <div class="mini-card"><span class="muted">Sales</span> {{ current_week.sales | gold }}</div>
+    <div class="mini-card"><span class="muted">Taxes</span> {{ current_week.taxes | gold }}</div>
+    <div class="mini-card"><span class="muted">Purchases</span> {{ current_week.purchases | gold }}</div>
+    <div class="mini-card"><span class="muted">Deposits</span> {{ current_week.deposits | gold }}</div>
+    <div class="mini-card"><span class="muted">Raffle</span> {{ current_week.raffle | gold }}</div>
+    <div class="mini-card"><span class="muted">Donations</span> {{ current_week.donations | gold }}</div>
+    {% if current_week.rank %}
+      <div class="mini-card"><span class="muted">Sales Rank</span> #{{ current_week.rank }}</div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+<section class="panel wide">
+  <h3>Sales over time</h3>
+  <canvas id="salesChart" height="120"></canvas>
+</section>
+
+<section class="panel wide">
+  <h3>Contribution composition</h3>
+  <canvas id="contribChart" height="140"></canvas>
+</section>
+
+<section class="panel wide">
+  <h3>Per-week history</h3>
+  <p class="muted small">Showing the most recent {{ weeks | length }} weeks
+    {% if weeks | length >= limit %}
+    (capped at {{ limit }};
+    <a href="?limit={{ limit + 100 }}">show more</a>)
+    {% endif %}
+  </p>
+  <div class="table-wrap">
+  <table class="data sortable">
+    <thead>
+      <tr>
+        <th>Week Ending</th>
+        <th class="num">Sales</th>
+        <th class="num">Taxes</th>
+        <th class="num">Purchases</th>
+        <th class="num">Deposits</th>
+        <th class="num">Raffle</th>
+        <th class="num">Donations</th>
+        <th class="num">Contribution</th>
+        <th>Trader</th>
+        <th class="num">Rank</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in weeks %}
+      <tr>
+        <td>{{ w.ending_date | nicedate }}</td>
+        <td class="num">{{ w.sales | gold }}</td>
+        <td class="num">{{ w.taxes | gold }}</td>
+        <td class="num">{{ w.purchases | gold }}</td>
+        <td class="num">{{ w.deposits | gold }}</td>
+        <td class="num">{{ w.raffle | gold }}</td>
+        <td class="num">{{ w.donations | gold }}</td>
+        <td class="num emph">{{ w.contribution | gold }}</td>
+        <td>{% if w.trader_name %}{{ w.trader_name }}<span class="muted small"> · {{ w.trader_location }}</span>{% else %}—{% endif %}</td>
+        <td class="num">{% if w.guild_rank %}#{{ w.guild_rank }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<script>
+  const chartData = {{ chart_data | tojson }};
+  const labels = chartData.map(r => r.ending_date);
+
+  // Sales chart (line)
+  new Chart(document.getElementById('salesChart'), {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Weekly sales',
+        data: chartData.map(r => r.sales),
+        borderColor: '#fbbc04',
+        backgroundColor: 'rgba(251,188,4,0.15)',
+        tension: 0.25,
+        pointRadius: 2,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#c9d1d9' } } },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 12 }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#8b949e', callback: v => v.toLocaleString() + 'g' }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+
+  // Contribution composition (stacked bar)
+  new Chart(document.getElementById('contribChart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: 'Taxes',     data: chartData.map(r => r.taxes),     backgroundColor: '#7ee787' },
+        { label: 'Deposits',  data: chartData.map(r => r.deposits),  backgroundColor: '#79c0ff' },
+        { label: 'Raffle',    data: chartData.map(r => r.raffle),    backgroundColor: '#fbbc04' },
+        { label: 'Donations', data: chartData.map(r => r.donations), backgroundColor: '#d2a8ff' },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#c9d1d9' } } },
+      scales: {
+        x: { stacked: true, ticks: { color: '#8b949e', maxTicksLimit: 12 }, grid: { color: '#21262d' } },
+        y: { stacked: true, ticks: { color: '#8b949e', callback: v => v.toLocaleString() + 'g' }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+
+  // Tiny client-side sortable
+  document.querySelectorAll('table.sortable th').forEach((th, i) => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      const tbody = th.closest('table').querySelector('tbody');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const isNum = th.classList.contains('num');
+      const asc = th.dataset.dir !== 'asc';
+      th.closest('tr').querySelectorAll('th').forEach(o => delete o.dataset.dir);
+      th.dataset.dir = asc ? 'asc' : 'desc';
+      rows.sort((a, b) => {
+        let av = a.children[i].innerText.trim();
+        let bv = b.children[i].innerText.trim();
+        if (isNum) {
+          av = parseFloat(av.replace(/[^0-9.\-]/g, '')) || 0;
+          bv = parseFloat(bv.replace(/[^0-9.\-]/g, '')) || 0;
+        }
+        return asc ? (av > bv ? 1 : av < bv ? -1 : 0) : (av < bv ? 1 : av > bv ? -1 : 0);
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+</script>
+{% endblock %}

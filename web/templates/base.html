@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ site_title }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"
+          integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
+          integrity="sha384-IdgUR+OqUhk0CdT2lZ7OmoGm5yCyFjJrKEJJxwGGv8L3xhLmUf8Xj/yTRYgHKlMo"
+          crossorigin="anonymous"></script>
+</head>
+<body>
+  <nav class="topnav">
+    <a class="brand" href="/">{{ site_title }}</a>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/rankings">Rankings</a>
+      <a href="/raffles">Raffles</a>
+      <a href="/traders">Traders</a>
+      <a href="/trends">Trends</a>
+    </div>
+    <form class="user-picker" hx-get="/api/users/search" hx-trigger="keyup changed delay:200ms"
+          hx-target="#user-search-results" autocomplete="off"
+          onsubmit="event.preventDefault(); const inp = this.querySelector('input[name=q]');
+                   if (inp.value.trim()) window.location.href = '/u/' + (inp.value.startsWith('@') ? inp.value : '@' + inp.value);">
+      <input type="text" name="q" placeholder="Find a player… (e.g. @jeffk42)" />
+      <ul id="user-search-results" class="search-results"></ul>
+    </form>
+  </nav>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span>{{ site_title }}</span>
+    <span class="muted">·</span>
+    <span class="muted">Trade week ending {{ current_week_ending.strftime('%b %-d, %Y %H:%M UTC') }}
+      · {{ time_remaining }} remaining</span>
+  </footer>
+</body>
+</html>

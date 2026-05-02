@@ -1,0 +1,5 @@
+{% if results %}
+{% for name in results %}
+<li><a href="/u/{{ name }}">{{ name }}</a></li>
+{% endfor %}
+{% endif %}

@@ -1,0 +1,29 @@
+# /etc/systemd/system/aktt-web.service
+#
+# Runs the FastAPI web app behind uvicorn, listening on 127.0.0.1:8000.
+# Front it with Caddy or nginx for TLS and the public hostname.
+#
+# Install:
+#   sudo cp aktt-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now aktt-web.service
+#   sudo systemctl status aktt-web.service
+
+[Unit]
+Description=AKTT Guild Stats web UI
+After=network.target
+
+[Service]
+Type=simple
+User=akttuser
+Group=akttuser
+WorkingDirectory=/home/akttuser/aktt-tracker
+Environment=AKTT_DB=/home/akttuser/aktt-tracker/guildstats.db
+ExecStart=/home/akttuser/venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

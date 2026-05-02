@@ -1,0 +1,223 @@
+/* AKTT Guild Stats — dark gamer-clean theme.
+   Palette inspired by GitHub dark + ESO gold accents. */
+
+:root {
+  --bg:        #0d1117;
+  --bg-2:     #161b22;
+  --bg-3:     #21262d;
+  --border:   #30363d;
+  --text:     #c9d1d9;
+  --text-dim: #8b949e;
+  --gold:     #fbbc04;     /* ESO gold accent */
+  --gold-dim: #d8a002;
+  --green:    #7ee787;
+  --blue:     #79c0ff;
+  --purple:   #d2a8ff;
+  --red:      #ff7b72;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+
+a { color: var(--gold); text-decoration: none; }
+a:hover { color: var(--gold-dim); text-decoration: underline; }
+
+.muted     { color: var(--text-dim); }
+.small     { font-size: 0.85em; }
+.emph      { color: var(--gold); }
+
+/* --- nav ----------------------------------------------------------------- */
+
+.topnav {
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  padding: 0.6rem 1.2rem;
+  display: flex; align-items: center; gap: 1.5rem;
+  flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 10;
+}
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--gold);
+  letter-spacing: 0.2px;
+}
+.brand:hover { text-decoration: none; }
+.nav-links { display: flex; gap: 1rem; }
+.nav-links a {
+  color: var(--text);
+  font-weight: 500;
+  padding: 0.25rem 0;
+}
+.nav-links a:hover { color: var(--gold); text-decoration: none; }
+
+.user-picker {
+  margin-left: auto;
+  position: relative;
+  min-width: 240px;
+}
+.user-picker input {
+  width: 100%;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+.user-picker input:focus { outline: none; border-color: var(--gold); }
+.search-results {
+  position: absolute;
+  top: 100%; left: 0; right: 0;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-top: none;
+  margin: 0; padding: 0;
+  list-style: none;
+  max-height: 300px; overflow-y: auto;
+  border-radius: 0 0 4px 4px;
+  z-index: 20;
+}
+.search-results li { padding: 0; }
+.search-results li a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  color: var(--text);
+}
+.search-results li a:hover { background: var(--bg-3); color: var(--gold); text-decoration: none; }
+
+/* --- layout -------------------------------------------------------------- */
+
+.container { max-width: 1200px; width: 100%; margin: 0 auto; padding: 1.5rem 1.2rem; flex: 1; }
+
+.page-header { margin-bottom: 1.5rem; }
+.page-header h1 { margin: 0 0 0.25rem 0; color: var(--gold); }
+
+/* --- cards --------------------------------------------------------------- */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.2rem;
+}
+.card-title {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.card .big {
+  margin: 0 0 0.25rem 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--gold);
+}
+.card p { margin: 0; }
+
+.mini-card {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.95rem;
+}
+.mini-card .muted { display: block; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
+
+/* --- panels -------------------------------------------------------------- */
+
+.panel {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.2rem;
+  margin-bottom: 1.5rem;
+}
+.panel h3 { margin: 0 0 0.75rem 0; color: var(--text); }
+
+.grid { display: grid; gap: 1rem; margin-bottom: 1.5rem; }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+
+/* --- ranked lists -------------------------------------------------------- */
+
+.ranked { list-style: none; padding: 0; margin: 0; counter-reset: rank; }
+.ranked li {
+  counter-increment: rank;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--bg-3);
+}
+.ranked li:last-child { border-bottom: none; }
+.ranked li::before {
+  content: counter(rank) ".";
+  color: var(--gold);
+  font-weight: 600;
+  margin-right: 0.6rem;
+  min-width: 1.5em;
+  display: inline-block;
+}
+
+/* --- tables -------------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; }
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+table.data th, table.data td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid var(--bg-3);
+}
+table.data th {
+  background: var(--bg-3);
+  position: sticky; top: 0;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+table.data tbody tr:hover { background: rgba(251, 188, 4, 0.05); }
+table.data .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.data .emph { color: var(--gold); font-weight: 500; }
+
+table.sortable th[data-dir="asc"]::after { content: " ▲"; color: var(--gold); }
+table.sortable th[data-dir="desc"]::after { content: " ▼"; color: var(--gold); }
+
+/* --- footer -------------------------------------------------------------- */
+
+.footer {
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  padding: 0.6rem 1.2rem;
+  display: flex; gap: 0.6rem; justify-content: center;
+  font-size: 0.85rem;
+}
+
+/* --- responsive ---------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .topnav { gap: 0.5rem; }
+  .nav-links { gap: 0.6rem; font-size: 0.9rem; }
+  .user-picker { min-width: 100%; margin-left: 0; }
+}

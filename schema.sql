@@ -217,3 +217,20 @@ CREATE TABLE IF NOT EXISTS guild_traders (
 );
 
 CREATE INDEX IF NOT EXISTS idx_guild_traders_name ON guild_traders(trader_name);
+
+-- =============================================================================
+-- Phase 3: web UI support
+-- =============================================================================
+
+-- Key-value store for guild-wide settings used by the web app (e.g. the
+-- weekly contribution goal). Update with:
+--   UPDATE guild_settings SET value='50000' WHERE key='weekly_contribution_goal';
+CREATE TABLE IF NOT EXISTS guild_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO guild_settings (key, value)
+VALUES ('weekly_contribution_goal', '40000'),
+       ('site_title',                'AKTT Guild Stats');
