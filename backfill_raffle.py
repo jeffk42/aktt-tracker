@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import openpyxl
@@ -51,12 +51,41 @@ def _norm_account(s):
 
 
 def _parse_dt(v):
-    if v is None:
+    """Parse a value into a UTC datetime. Handles:
+      * datetime objects (openpyxl date cells)
+      * Excel serial-day numbers (sheets API SERIAL_NUMBER, or openpyxl
+        numeric cells that conceptually represent dates)
+      * ISO 8601 strings ('YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', etc.)
+      * US-format strings ('M/D/YY', 'MM/DD/YYYY', etc.)
+    Returns None for unparseable input.
+    """
+    if v is None or v == "":
         return None
     if isinstance(v, datetime):
         return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
-    s = str(v)
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
+    # Excel serial date (days since 1899-12-30, Lotus 1-2-3 leap-year quirk)
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        try:
+            anchor = datetime(1899, 12, 30, tzinfo=timezone.utc)
+            return anchor + timedelta(days=float(v))
+        except (OverflowError, ValueError):
+            return None
+    s = str(v).strip()
+    if not s:
+        return None
+    # Try as a numeric serial first (e.g. "46139" or "46139.5")
+    try:
+        f = float(s)
+        # Heuristic guard: only treat as serial if it falls in a plausible
+        # date range (~year 1990 .. year 2100 -> roughly 32874 .. 73050).
+        if 30000 < f < 75000:
+            anchor = datetime(1899, 12, 30, tzinfo=timezone.utc)
+            return anchor + timedelta(days=f)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d",
+                "%m/%d/%Y %H:%M:%S", "%m/%d/%Y", "%m/%d/%y",
+                "%-m/%-d/%Y", "%-m/%-d/%y"):
         try:
             return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
         except ValueError:

@@ -65,7 +65,7 @@ def main() -> int:
         "--db", str(DB_PATH),
         "--mm", str(mm_path),
         "--gbl", str(gbl_path),
-        "--week", week,
+        "--week", week, "--schema", str(APP_DIR / "schema.sql"),
     ]
     print(f"[aktt-drop] running: {' '.join(cmd)}")
     with open(log_path, "w", encoding="utf-8") as logf:
