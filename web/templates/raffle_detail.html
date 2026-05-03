@@ -15,7 +15,7 @@
   <h1>Raffle Drawing — {{ drawing_date | nicedate }}</h1>
 </header>
 
-{% for sec in sections %}
+{% for sec in sections | sort(attribute='raffle.raffle_type') | reverse %}
 {% set ra = sec.raffle %}
 <section class="panel wide raffle-section">
   <h2 class="raffle-section-title">
