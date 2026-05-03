@@ -40,8 +40,14 @@
     <div class="mini-card"><span class="muted">Deposits</span> {{ current_week.deposits | gold }}</div>
     <div class="mini-card"><span class="muted">Raffle</span> {{ current_week.raffle | gold }}</div>
     <div class="mini-card"><span class="muted">Donations</span> {{ current_week.donations | gold }}</div>
-    {% if current_week.rank %}
-      <div class="mini-card"><span class="muted">Sales Rank</span> #{{ current_week.rank }}</div>
+    {% if current_week.sales_rank %}
+      <div class="mini-card"><span class="muted">Sales Rank</span> #{{ current_week.sales_rank }}</div>
+    {% endif %}
+    {% if current_week.contrib_rank %}
+      <div class="mini-card"><span class="muted">Contribution Rank</span> #{{ current_week.contrib_rank }}</div>
+    {% endif %}
+    {% if current_week.purchase_rank %}
+      <div class="mini-card"><span class="muted">Purchase Rank</span> #{{ current_week.purchase_rank }}</div>
     {% endif %}
   </div>
 </section>
@@ -60,9 +66,12 @@
 <section class="panel wide">
   <h3>Per-week history</h3>
   <p class="muted small">Showing the most recent {{ weeks | length }} weeks
-    {% if weeks | length >= limit %}
+    {% if weeks | length >= limit and lifetime.weeks_active > limit %}
     (capped at {{ limit }};
-    <a href="?limit={{ limit + 100 }}">show more</a>)
+    {% set next_limit = (limit + 100) if (limit + 100) < lifetime.weeks_active else lifetime.weeks_active %}
+    <a href="?limit={{ next_limit }}">show {{ next_limit }}</a>
+    &nbsp;·&nbsp;
+    <a href="?limit={{ lifetime.weeks_active }}">show all {{ lifetime.weeks_active }}</a>)
     {% endif %}
   </p>
   <div class="table-wrap">
@@ -78,7 +87,9 @@
         <th class="num">Donations</th>
         <th class="num">Contribution</th>
         <th>Trader</th>
-        <th class="num">Rank</th>
+        <th class="num">Sales<br>Rank</th>
+        <th class="num">Contrib<br>Rank</th>
+        <th class="num">Purch<br>Rank</th>
       </tr>
     </thead>
     <tbody>
@@ -93,7 +104,9 @@
         <td class="num">{{ w.donations | gold }}</td>
         <td class="num emph">{{ w.contribution | gold }}</td>
         <td>{% if w.trader_name %}{{ w.trader_name }}<span class="muted small"> · {{ w.trader_location }}</span>{% else %}—{% endif %}</td>
-        <td class="num">{% if w.guild_rank %}#{{ w.guild_rank }}{% else %}—{% endif %}</td>
+        <td class="num">{% if w.sales_rank %}#{{ w.sales_rank }}{% else %}—{% endif %}</td>
+        <td class="num">{% if w.contrib_rank %}#{{ w.contrib_rank }}{% else %}—{% endif %}</td>
+        <td class="num">{% if w.purchase_rank %}#{{ w.purchase_rank }}{% else %}—{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

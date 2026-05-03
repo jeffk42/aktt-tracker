@@ -211,7 +211,7 @@ def home(request: Request):
 
 @app.get("/u/{account_name}", response_class=HTMLResponse)
 def personal_stats(request: Request, account_name: str,
-                   limit: int = Query(default=104, ge=4, le=300)):
+                   limit: int = Query(default=104, ge=4, le=9999)):
     """Personal stats page. URL is the account name with leading @ for
     bookmarking. limit caps the per-week table; default ~2 years."""
     conn = get_db()
@@ -223,7 +223,8 @@ def personal_stats(request: Request, account_name: str,
             return RedirectResponse(url=f"/u/@{account_name}", status_code=302)
 
         user = conn.execute(
-            "SELECT id, account_name FROM users WHERE account_name = ? AND excluded = 0",
+            "SELECT id, account_name FROM users "
+            "WHERE account_name = ? COLLATE NOCASE AND excluded = 0",
             (account_name,)
         ).fetchone()
         if not user:
@@ -246,8 +247,29 @@ def personal_stats(request: Request, account_name: str,
         lifetime_dict = dict(lifetime)
         lifetime_dict["contribution"] = contrib
 
-        # Per-week history (newest first)
+        # Per-week history (newest first). Ranks are computed via window
+        # functions across all non-excluded users for each week the user
+        # appears in. Limited subquery so we don't rank-sort all 102k rows.
         weeks = conn.execute("""
+            WITH user_weeks AS (
+              SELECT week_id FROM user_week_stats WHERE user_id = ?
+            ),
+            ranked AS (
+              SELECT
+                s.user_id, s.week_id,
+                RANK() OVER (PARTITION BY s.week_id ORDER BY s.sales DESC)
+                  AS sales_rank,
+                RANK() OVER (PARTITION BY s.week_id
+                             ORDER BY (s.taxes + s.total_deposits +
+                                       s.total_raffle + s.total_donations) DESC)
+                  AS contrib_rank,
+                RANK() OVER (PARTITION BY s.week_id ORDER BY s.purchases DESC)
+                  AS purchase_rank
+              FROM user_week_stats s
+              JOIN users u ON u.id = s.user_id
+              WHERE s.week_id IN (SELECT week_id FROM user_weeks)
+                AND u.excluded = 0
+            )
             SELECT w.ending_date,
                    s.sales, s.taxes, s.purchases,
                    s.total_deposits AS deposits,
@@ -256,14 +278,15 @@ def personal_stats(request: Request, account_name: str,
                    (s.taxes + s.total_deposits + s.total_raffle + s.total_donations)
                        AS contribution,
                    gt.trader_name, gt.location AS trader_location,
-                   s.rank AS guild_rank
+                   r.sales_rank, r.contrib_rank, r.purchase_rank
               FROM user_week_stats s
               JOIN weeks w ON w.id = s.week_id
               LEFT JOIN guild_traders gt ON gt.week_id = w.id
+              JOIN ranked r ON r.user_id = s.user_id AND r.week_id = s.week_id
              WHERE s.user_id = ?
              ORDER BY w.ending_date DESC
              LIMIT ?
-        """, (user["id"], limit)).fetchall()
+        """, (user["id"], user["id"], limit)).fetchall()
 
         # For chart: reverse chronological back to chronological
         chart_data = list(reversed([
@@ -278,16 +301,33 @@ def personal_stats(request: Request, account_name: str,
             } for w in weeks
         ]))
 
-        # Current week stats card
+        # Current week stats card with computed ranks
         cur = conn.execute("""
+            WITH ranked AS (
+              SELECT
+                s.user_id,
+                RANK() OVER (ORDER BY s.sales DESC) AS sales_rank,
+                RANK() OVER (ORDER BY (s.taxes + s.total_deposits +
+                                       s.total_raffle + s.total_donations) DESC)
+                  AS contrib_rank,
+                RANK() OVER (ORDER BY s.purchases DESC) AS purchase_rank
+              FROM user_week_stats s
+              JOIN users u ON u.id = s.user_id
+              JOIN weeks w ON w.id = s.week_id
+              WHERE w.ending_date = ? AND u.excluded = 0
+            )
             SELECT s.sales, s.taxes, s.purchases,
                    s.total_deposits AS deposits,
                    s.total_raffle AS raffle,
-                   s.total_donations AS donations, s.rank
+                   s.total_donations AS donations,
+                   r.sales_rank, r.contrib_rank, r.purchase_rank
               FROM user_week_stats s
               JOIN weeks w ON w.id = s.week_id
+              JOIN ranked r ON r.user_id = s.user_id
              WHERE s.user_id = ? AND w.ending_date = ?
-        """, (user["id"], ctx["current_week_ending"].date().isoformat())).fetchone()
+        """, (ctx["current_week_ending"].date().isoformat(),
+              user["id"],
+              ctx["current_week_ending"].date().isoformat())).fetchone()
 
         ctx.update(
             user=user, lifetime=lifetime_dict, weeks=weeks,
@@ -308,7 +348,7 @@ def user_search(request: Request, q: str = Query(default="", min_length=0)):
             return HTMLResponse("")
         rows = conn.execute("""
             SELECT account_name FROM users
-             WHERE excluded = 0 AND account_name LIKE ?
+             WHERE excluded = 0 AND account_name LIKE ? COLLATE NOCASE
              ORDER BY account_name LIMIT 12
         """, (f"%{q_norm}%",)).fetchall()
         return templates.TemplateResponse(
@@ -341,7 +381,13 @@ def coming_soon(request: Request):
 
 @app.exception_handler(404)
 def not_found(request: Request, exc):
-    return templates.TemplateResponse(
-        request, "404.html", {"detail": str(exc.detail) if hasattr(exc, "detail") else "Not found"},
-        status_code=404
-    )
+    """404 needs the full site_context so base.html can render its nav, footer,
+    etc. Without it, Jinja raises UndefinedError on {{ site_title }} and the
+    response becomes a 500."""
+    conn = get_db()
+    try:
+        ctx = site_context(conn)
+        ctx["detail"] = str(exc.detail) if hasattr(exc, "detail") else "Not found"
+        return templates.TemplateResponse(request, "404.html", ctx, status_code=404)
+    finally:
+        conn.close()

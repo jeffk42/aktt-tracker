@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}{{ site_title }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
-  <script src="https://unpkg.com/htmx.org@1.9.12"
-          integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2"
-          crossorigin="anonymous"></script>
+  <!-- HTMX and Chart.js from CDN. No integrity attrs since they have to be
+       valid hashes; we'll self-host these on the LXC in a future pass for
+       offline reliability and supply-chain safety. -->
+  <script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
-          integrity="sha384-IdgUR+OqUhk0CdT2lZ7OmoGm5yCyFjJrKEJJxwGGv8L3xhLmUf8Xj/yTRYgHKlMo"
           crossorigin="anonymous"></script>
 </head>
 <body>
@@ -22,11 +22,13 @@
       <a href="/traders">Traders</a>
       <a href="/trends">Trends</a>
     </div>
-    <form class="user-picker" hx-get="/api/users/search" hx-trigger="keyup changed delay:200ms"
-          hx-target="#user-search-results" autocomplete="off"
+    <form class="user-picker" autocomplete="off"
           onsubmit="event.preventDefault(); const inp = this.querySelector('input[name=q]');
                    if (inp.value.trim()) window.location.href = '/u/' + (inp.value.startsWith('@') ? inp.value : '@' + inp.value);">
-      <input type="text" name="q" placeholder="Find a player… (e.g. @jeffk42)" />
+      <input type="text" name="q" placeholder="Find a player… (e.g. @jeffk42)"
+             hx-get="/api/users/search"
+             hx-trigger="keyup changed delay:200ms"
+             hx-target="#user-search-results" />
       <ul id="user-search-results" class="search-results"></ul>
     </form>
   </nav>
