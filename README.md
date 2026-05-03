@@ -3,23 +3,33 @@
 A SQLite-backed replacement for the spreadsheet-driven weekly stats workflow.
 
 The system runs alongside the legacy spreadsheet pipeline. The database
-accumulates a clean, queryable record while the spreadsheets remain authoritative
-for in-game raffle drawings (via the existing Apps Script). Once the eventual
-web UI is in place, the database becomes authoritative and the spreadsheets retire.
+accumulates a clean, queryable record and is queried by a public read-only
+web UI; the spreadsheets remain authoritative for in-game raffle drawings
+(via the existing Apps Script) until the database takes over winner-picking
+in Phase 4.
 
 ## Files
 
 | File                     | Role                                                          |
 |--------------------------|---------------------------------------------------------------|
 | `schema.sql`             | SQLite schema (idempotent; `sqlite3 db < schema.sql`)         |
+| `migrate.py`             | Applies missing `ALTER TABLE` columns to an existing DB       |
 | `guildstats.py`          | Shared library: db helpers, week math, raffle/donation logic  |
 | `backfill.py`            | One-time import of donations workbook history (Phase 1)       |
 | `backfill_raffle.py`     | One-time import of standard + high-roller raffle history      |
+| `backfill_traders.py`    | One-time import of trader-bid history (2022 onward)           |
 | `ingest.py`              | Weekly ingest from MasterMerchant.lua + GBLData.lua           |
 | `validate.py`            | Compare DB against legacy `donation_summary.csv` for sanity   |
-| `donations.py`           | CLI for mail-in donations (add / list / promote)              |
+| `donations.py`           | CLI for mail-in donations (add / list / promote / sheet sync) |
 | `entry.py`               | CLI for manual raffle entries (FISHING/EVENT/etc)             |
+| `traders.py`             | CLI for weekly winning trader bid (add / list / remove)       |
 | `import_winners.py`      | Pull final entries+prizes+winners from raffle xlsx after draw |
+| `sync_from_drive.py`     | Drive-side wrapper for import_winners (downloads + imports)   |
+| `drive_sync.py`          | Google Drive API helper (service-account auth)                |
+| `web/app.py`             | FastAPI read-only web UI (dashboard, rankings, raffles, etc.) |
+| `web/templates/*.html`   | Jinja2 templates for each page                                |
+| `web/static/*`           | CSS + tiny shared sortable-table JS                           |
+| `automation/*`           | systemd units, Caddy config, Windows SCP helper, setup guides |
 | `_smoketest_slpp_shim.py`| Sandbox-only Lua extractor; safe to delete on the LXC         |
 
 ## LXC setup
@@ -29,7 +39,9 @@ A Debian/Ubuntu LXC with 2 vCPU, 2 GB RAM, 8 GB disk is plenty.
 ```bash
 apt update && apt install -y python3 python3-pip python3-venv sqlite3
 python3 -m venv ~/venv && source ~/venv/bin/activate
-pip install slpp openpyxl tzdata
+pip install slpp openpyxl tzdata \
+            google-api-python-client google-auth \
+            fastapi 'uvicorn[standard]' jinja2
 ```
 
 `tzdata` is required: the raffle-deadline math uses `ZoneInfo('US/Eastern')`,
@@ -166,9 +178,27 @@ SELECT u.account_name, tix.total_tix, COALESCE(wins.wins,0) AS wins
  ORDER BY total_tix DESC LIMIT 30;
 ```
 
+## Web UI
+
+A read-only FastAPI app lives in `web/`. Routes:
+
+- `/`                          dashboard (current trader, top-5s, weekly goal)
+- `/u/@account`                personal stats for one user (charts, history)
+- `/rankings`                  leaderboards with period selector (4w / 13w / 52w / lifetime)
+- `/raffles`                   index of every drawing
+- `/raffles/{drawing_date}`    per-drawing detail (prizes, winners, top entrants)
+- `/traders`                   trader-bid history (bid amounts hidden by design)
+- `/trends`                    guild-wide trends over time, four Chart.js panels
+- `/api/users/search?q=...`    HTMX dropdown lookup
+
+Setup and deployment are documented in `automation/SETUP_WEB.md`. The dev
+server runs with `uvicorn web.app:app --reload`; production goes behind
+Caddy via the `aktt-web.service` systemd unit.
+
 ## What's NOT here yet
 
-- Web UI / public-facing site
-- Automated file transfer from Windows -> LXC
-- Automatic winner picking inside the database (Apps Script still drives that)
-- Discord bot, scheduled cron triggers
+- Officer-only forms inside the web UI for donations / manual entries / trader bids
+  (CLI scripts are still the way to do these)
+- Database-side winner picking (the Friday Apps Script still drives drawings)
+- Self-hosted Chart.js / HTMX (currently loaded from CDN; planned for offline reliability)
+- Discord bot integration

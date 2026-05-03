@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Raffle · {{ drawing_date }} · {{ site_title }}{% endblock %}
+{% block content %}
+
+<header class="page-header">
+  <p class="muted small">
+    <a href="/raffles">← all raffles</a>
+    {% if prev_date %}
+      &nbsp;·&nbsp; <a href="/raffles/{{ prev_date }}">← {{ prev_date | nicedate }}</a>
+    {% endif %}
+    {% if next_date %}
+      &nbsp;·&nbsp; <a href="/raffles/{{ next_date }}">{{ next_date | nicedate }} →</a>
+    {% endif %}
+  </p>
+  <h1>Raffle Drawing — {{ drawing_date | nicedate }}</h1>
+</header>
+
+{% for sec in sections %}
+{% set ra = sec.raffle %}
+<section class="panel wide raffle-section">
+  <h2 class="raffle-section-title">
+    {% if ra.raffle_type == 'standard' %}Standard Raffle
+    {% elif ra.raffle_type == 'high_roller' %}High-Roller Raffle
+    {% else %}{{ ra.raffle_type }}{% endif %}
+    <span class="muted small">·
+      {% if ra.status == 'drawn' %}drawn
+      {% elif ra.remaining %}{{ ra.remaining }}
+      {% else %}{{ ra.status }}
+      {% endif %}
+    </span>
+  </h2>
+
+  <div class="cards">
+    <div class="card">
+      <h3 class="card-title">Tickets Sold</h3>
+      <p class="big">{{ sec.stats.tickets | intcomma }}</p>
+      <p class="muted">{{ sec.stats.entries | intcomma }} entries</p>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Entrants</h3>
+      <p class="big">{{ sec.stats.entrants | intcomma }}</p>
+      <p class="muted">distinct accounts</p>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Gold In</h3>
+      <p class="big">{{ sec.stats.gold_in | gold }}</p>
+      <p class="muted">total raffle deposits</p>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Status</h3>
+      {% if ra.status == 'drawn' %}
+        <p class="big">Drawn</p>
+        <p class="muted">{{ sec.prizes | length }} prize{{ '' if sec.prizes | length == 1 else 's' }} awarded</p>
+      {% else %}
+        <p class="big">{{ ra.status | capitalize }}</p>
+        <p class="muted">deadline {{ ra.deadline_at }}</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="grid two">
+    <div class="panel">
+      <h3>Prizes & Winners</h3>
+      {% if sec.prizes %}
+        {% set ns = namespace(last_cat=None) %}
+        <table class="data prize-table">
+          <thead>
+            <tr>
+              <th class="num">#</th>
+              <th>Prize</th>
+              <th class="num">Threshold</th>
+              <th>Winner</th>
+              <th class="num">Ticket</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in sec.prizes %}
+            {% if p.category != ns.last_cat %}
+              {% set ns.last_cat = p.category %}
+              <tr class="prize-cat-header">
+                <td colspan="5">
+                  {% if p.category == 'main' %}Main Prizes{% else %}Mini Prizes{% endif %}
+                </td>
+              </tr>
+            {% endif %}
+            <tr>
+              <td class="num muted">{{ p.display_order }}</td>
+              <td>
+                {% if p.prize_type == 'gold' and p.gold_amount %}
+                  {{ p.gold_amount | gold }}
+                {% elif p.item_description %}
+                  {{ p.item_description }}
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+                {% if p.notes %}<span class="muted small"> · {{ p.notes }}</span>{% endif %}
+              </td>
+              <td class="num muted">{% if p.active_at_ticket_count %}{{ p.active_at_ticket_count | intcomma }}{% else %}—{% endif %}</td>
+              <td>
+                {% if p.winner_name %}<a href="/u/{{ p.winner_name }}">{{ p.winner_name }}</a>
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
+              <td class="num">{% if p.winning_ticket_number %}#{{ p.winning_ticket_number | intcomma }}{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted">No prizes recorded for this raffle.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <h3>Top Entrants</h3>
+      {% if sec.top_entrants %}
+        <ol class="ranked">
+          {% for r in sec.top_entrants %}
+          <li>
+            <a href="/u/{{ r.account_name }}">{{ r.account_name }}</a>
+            <span class="muted">
+              {{ r.tickets | intcomma }} tickets
+              {% if ra.raffle_type == 'high_roller' %}
+                {# HR-only, the value here equals r.hr #}
+              {% else %}
+                <span class="small">({{ r.paid | intcomma }}p / {{ r.free | intcomma }}f)</span>
+              {% endif %}
+            </span>
+          </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="muted">No entries yet.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% else %}
+<section class="panel">
+  <p class="muted">No raffles recorded for {{ drawing_date }}.</p>
+</section>
+{% endfor %}
+
+{% endblock %}

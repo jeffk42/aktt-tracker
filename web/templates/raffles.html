@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Raffles · {{ site_title }}{% endblock %}
+{% block content %}
+
+<header class="page-header">
+  <h1>Raffles</h1>
+  <p class="muted">AKTT runs a standard and a high-roller raffle each Friday.
+    Click a row to see prizes, winners, and entrant details.</p>
+</header>
+
+{% if featured %}
+{% set f = featured %}
+<section class="panel wide raffle-featured">
+  {% if f.any_open %}
+    <h3>Next Drawing — {{ f.drawing_date | nicedate }}</h3>
+  {% else %}
+    <h3>Latest Drawing — <a href="/raffles/{{ f.drawing_date }}">{{ f.drawing_date | nicedate }}</a></h3>
+  {% endif %}
+  <div class="cards">
+    <div class="card">
+      <h3 class="card-title">Standard Raffle</h3>
+      {% if f.standard %}
+        <p class="big">{{ f.standard.tickets | intcomma }} <span class="muted small">tickets</span></p>
+        <p class="muted">{{ f.standard.entrants | intcomma }} entrants
+          {% if f.standard.status != 'drawn' and f.standard.remaining %}
+            · <span class="emph">{{ f.standard.remaining }}</span>
+          {% else %}
+            · drawn
+          {% endif %}
+        </p>
+      {% else %}
+        <p class="big muted">—</p>
+        <p class="muted">no standard raffle</p>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h3 class="card-title">High-roller Raffle</h3>
+      {% if f.high_roller %}
+        <p class="big">{{ f.high_roller.tickets | intcomma }} <span class="muted small">tickets</span></p>
+        <p class="muted">{{ f.high_roller.entrants | intcomma }} entrants
+          {% if f.high_roller.status != 'drawn' and f.high_roller.remaining %}
+            · <span class="emph">{{ f.high_roller.remaining }}</span>
+          {% else %}
+            · drawn
+          {% endif %}
+        </p>
+      {% else %}
+        <p class="big muted">—</p>
+        <p class="muted">no HR raffle</p>
+      {% endif %}
+    </div>
+  </div>
+  {% if f.any_open %}
+    <p class="muted small">Drawing closes Friday 8 PM ET.
+      Tickets accumulate until the deadline; the page above is updated as ingest runs.
+      <a href="/raffles/{{ f.drawing_date }}">view drawing details →</a>
+    </p>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel wide">
+  <h3>Recent drawings</h3>
+  <p class="muted small">
+    Showing the most recent {{ drawings | length }} drawings
+    {% if drawings | length >= limit and total_drawings > limit %}
+      {% set next_limit = (limit + 26) if (limit + 26) < total_drawings else total_drawings %}
+      (capped at {{ limit }};
+      <a href="?limit={{ next_limit }}">show {{ next_limit }}</a>
+      &nbsp;·&nbsp;
+      <a href="?limit={{ total_drawings }}">show all {{ total_drawings }}</a>)
+    {% endif %}
+  </p>
+  {% if drawings %}
+  <div class="table-wrap">
+    <table class="data sortable raffle-index">
+      <thead>
+        <tr>
+          <th>Drawing Date</th>
+          <th class="num">Std Tickets</th>
+          <th class="num">Std Entrants</th>
+          <th class="num">HR Tickets</th>
+          <th class="num">HR Entrants</th>
+          <th>Status</th>
+          <th class="num">Prizes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in drawings %}
+        <tr class="row-link" data-href="/raffles/{{ d.drawing_date }}">
+          <td><a href="/raffles/{{ d.drawing_date }}">{{ d.drawing_date | nicedate }}</a></td>
+          <td class="num">{{ (d.standard.tickets if d.standard else 0) | intcomma }}</td>
+          <td class="num">{{ (d.standard.entrants if d.standard else 0) | intcomma }}</td>
+          <td class="num">{{ (d.high_roller.tickets if d.high_roller else 0) | intcomma }}</td>
+          <td class="num">{{ (d.high_roller.entrants if d.high_roller else 0) | intcomma }}</td>
+          <td>
+            {% if d.any_open %}
+              <span class="emph">open</span>
+            {% else %}
+              <span class="muted">drawn</span>
+            {% endif %}
+          </td>
+          <td class="num">
+            {% set p = (d.standard.prizes_count if d.standard else 0) + (d.high_roller.prizes_count if d.high_roller else 0) %}
+            {% set w = (d.standard.winners_count if d.standard else 0) + (d.high_roller.winners_count if d.high_roller else 0) %}
+            {{ w | intcomma }}<span class="muted small"> / {{ p | intcomma }}</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No raffles recorded yet.</p>
+  {% endif %}
+</section>
+
+<script>
+  // Whole-row click navigation in the raffles index. The first cell already
+  // contains an <a>, so keyboard/screen-reader users still navigate properly;
+  // this just adds the convenience that mouse users expect from a table where
+  // every row is a link.
+  document.querySelectorAll('table.raffle-index tbody tr.row-link').forEach(function (tr) {
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', function (e) {
+      // Don't hijack if the user clicked an actual link (let it work normally)
+      if (e.target.tagName === 'A') return;
+      window.location.href = tr.dataset.href;
+    });
+  });
+</script>
+
+{% endblock %}

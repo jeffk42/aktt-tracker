@@ -243,6 +243,31 @@ table.data .emph { color: var(--gold); font-weight: 500; }
 table.sortable th[data-dir="asc"]::after { content: " ▲"; color: var(--gold); }
 table.sortable th[data-dir="desc"]::after { content: " ▼"; color: var(--gold); }
 
+/* --- raffles ------------------------------------------------------------ */
+
+table.raffle-index tbody tr.row-link:hover { background: rgba(251, 188, 4, 0.08); }
+
+.raffle-section { padding-top: 0.6rem; }
+.raffle-section-title {
+  margin: 0 0 1rem 0;
+  font-size: 1.15rem;
+  color: var(--gold);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+}
+.raffle-section-title .muted { color: var(--text-dim); }
+.raffle-section-title .small { font-size: 0.8rem; }
+
+table.prize-table tr.prize-cat-header td {
+  background: var(--bg-3);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.4px;
+  padding-top: 0.5rem;
+  padding-bottom: 0.3rem;
+}
+
 /* --- footer -------------------------------------------------------------- */
 
 .footer {

@@ -79,12 +79,36 @@ sudo ufw allow 443/tcp
 sudo ufw enable
 ```
 
-## What's available right now (phase 3.1)
+## Pages
 
-- `/`              dashboard with current trader, top 5 sellers / buyers / contributors,
-                   active member count
-- `/u/@account`    personal stats page (full history, charts, sortable table)
-- `/api/users/search?q=...`  HTMX dropdown lookup
+All five top-nav items are live as of Phase 3.5.
 
-`/rankings`, `/raffles`, `/traders`, `/trends` show a placeholder page;
-those are the next phases.
+- `/`                          dashboard with current trader, top-5 sellers / buyers /
+                               contributors, active member count, weekly goal
+- `/u/@account`                personal stats page (full history, sales + contribution
+                               charts, sortable per-week table)
+- `/rankings`                  six leaderboards (sellers, contributors, buyers,
+                               item donors, raffle buyers, raffle wins) plus
+                               "Most Active" on multi-week views; period selector
+                               at the top — `current`, `4w`, `13w`, `52w`, `lifetime`
+- `/raffles`                   index of every drawing with std + HR ticket counts
+                               and a featured "next/latest drawing" card
+- `/raffles/{YYYY-MM-DD}`      per-drawing detail (standard + HR side by side,
+                               prize tables with winners, top entrants)
+- `/traders`                   trader history; current trader card, win-rate stats,
+                               top locations / NPCs, sortable per-week table.
+                               Bid amounts are intentionally NOT exposed.
+- `/trends`                    guild-wide trends — four Chart.js panels
+                               (weekly sales, contribution composition stacked,
+                               active members, raffle tickets per drawing with
+                               dual y-axes for std vs HR)
+- `/api/users/search?q=...`    HTMX dropdown fragment for the search box
+
+Routes that show long tables accept `?limit=N` to extend pagination.
+
+## What's NOT in the web UI yet
+
+- Officer-only forms for adding donations, manual entries, and trader bids
+  (still done via the CLI scripts)
+- Database-side raffle drawing
+- Self-hosted Chart.js / HTMX (currently CDN-loaded)

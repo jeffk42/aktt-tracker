@@ -20,6 +20,7 @@ activated the venv (`source ~/venv/bin/activate`).
 | Pull everything from Drive (raffle + winners) | `python3 sync_from_drive.py …`       |
 | Record this week's trader bid                 | `python3 traders.py … add …`         |
 | One-time historical backfills                 | `python3 backfill*.py …`             |
+| Run the web UI (dev / prod)                   | `uvicorn web.app:app …`              |
 
 ## Setup (one-time)
 
@@ -28,7 +29,9 @@ activated the venv (`source ~/venv/bin/activate`).
 ```bash
 apt update && apt install -y python3 python3-pip python3-venv sqlite3
 python3 -m venv ~/venv && source ~/venv/bin/activate
-pip install slpp openpyxl tzdata google-api-python-client google-auth
+pip install slpp openpyxl tzdata \
+            google-api-python-client google-auth \
+            fastapi 'uvicorn[standard]' jinja2
 ```
 
 ### Initialize a fresh database
@@ -184,6 +187,48 @@ python3 backfill_traders.py --db $AKTT_DB --xlsx "Trader Bids.xlsx"
 
 # Specific years only
 python3 backfill_traders.py --db $AKTT_DB --xlsx "Trader Bids.xlsx" --years 2024,2025,2026
+```
+
+## Web UI
+
+### Run the dev server (manual smoke test)
+
+```bash
+cd /home/akttuser/aktt-tracker
+AKTT_DB=$AKTT_DB uvicorn web.app:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Then visit `http://<lxc-ip>:8000/`. See `automation/SETUP_WEB.md` for the
+production setup behind Caddy.
+
+### Routes
+
+| Path                          | What it shows                                                      |
+|-------------------------------|--------------------------------------------------------------------|
+| `/`                           | Dashboard (current trader, top-5s, weekly goal, active members)    |
+| `/u/@account`                 | Personal stats for one user (lifetime cards, charts, history)      |
+| `/rankings?period=lifetime`   | Top sellers/contributors/buyers/donors/raffle/wins                 |
+| `/raffles`                    | Index of every drawing with std + HR ticket counts                 |
+| `/raffles/{YYYY-MM-DD}`       | Per-drawing detail (prizes, winners, top entrants)                 |
+| `/traders`                    | Trader-bid history (bid amounts hidden); top locations & NPCs      |
+| `/trends`                     | Guild-wide aggregates (sales, contribution, members, raffle tickets)|
+| `/api/users/search?q=...`     | HTMX dropdown fragment for the search box                          |
+
+`?period=` on `/rankings` accepts `current`, `4w`, `13w`, `52w`, `lifetime`.
+Most pages with long tables accept `?limit=N` to extend pagination.
+
+### Update the weekly goal shown on the dashboard
+
+```bash
+sqlite3 $AKTT_DB "UPDATE guild_settings SET value='50000' WHERE key='weekly_contribution_goal';"
+```
+
+### Restart the production service after a deploy
+
+```bash
+sudo systemctl restart aktt-web.service
+sudo systemctl status aktt-web.service
+journalctl -u aktt-web.service -f
 ```
 
 ## Validation and diagnostics
@@ -347,4 +392,8 @@ holds what:
 | `sync_from_drive.py`  | Drive-side wrapper for import_winners                    |
 | `drive_sync.py`       | Drive API helper (download spreadsheets as xlsx)         |
 | `validate.py`         | DB-vs-CSV parity check                                   |
-| `automation/*`        | systemd units, Windows scp helper, setup guides          |
+| `web/app.py`          | FastAPI app: every read-side route                       |
+| `web/templates/*.html`| Jinja2 templates (one per page, plus base/404)           |
+| `web/static/style.css`| Dark gamer theme with ESO-gold accents                   |
+| `web/static/sortable.js` | Tiny shared sortable-table JS, included from base.html|
+| `automation/*`        | systemd units, Windows scp helper, Caddy config, guides  |

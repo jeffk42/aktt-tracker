@@ -676,6 +676,207 @@ def trends(request: Request, limit: int = Query(default=104, ge=8, le=9999)):
         conn.close()
 
 
+def _format_remaining(deadline_str: str, now_utc: datetime) -> str:
+    """Parse 'YYYY-MM-DD HH:MM:SS' (UTC) and return 'Nd Nh Nm remaining' or
+    'closed' if past."""
+    try:
+        d = datetime.fromisoformat(deadline_str.replace(" ", "T"))
+    except (ValueError, AttributeError):
+        return ""
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    delta = d - now_utc
+    if delta.total_seconds() <= 0:
+        return "closed"
+    return _format_timedelta(delta) + " remaining"
+
+
+@app.get("/raffles", response_class=HTMLResponse)
+def raffles_index(request: Request,
+                  limit: int = Query(default=26, ge=4, le=9999)):
+    """Index of raffles: featured (next/latest) drawing on top, then a table
+    of recent drawings linking through to per-drawing detail pages."""
+    conn = get_db()
+    try:
+        ctx = site_context(conn)
+        now = ctx["now_utc"]
+
+        # Total drawing dates ever, for the show-all link.
+        total_row = conn.execute(
+            "SELECT COUNT(DISTINCT drawing_date) AS n FROM raffles"
+        ).fetchone()
+        total_drawings = total_row["n"] if total_row else 0
+
+        # The N most recent drawing DATES (each date has up to 2 raffles:
+        # standard + high_roller). Aggregate ticket/entrant counts per raffle
+        # are joined in via subqueries.
+        rows = conn.execute("""
+            WITH recent_dates AS (
+              SELECT DISTINCT drawing_date FROM raffles
+               ORDER BY drawing_date DESC LIMIT ?
+            )
+            SELECT ra.id, ra.raffle_type, ra.drawing_date, ra.status,
+                   ra.deadline_at, ra.total_tickets_sold,
+                   COALESCE(t.tickets, 0)        AS tickets,
+                   COALESCE(t.entrants, 0)       AS entrants,
+                   COALESCE(p.prizes_count, 0)   AS prizes_count,
+                   COALESCE(w.winners_count, 0)  AS winners_count
+              FROM raffles ra
+              LEFT JOIN (
+                SELECT raffle_id,
+                       SUM(paid_tickets + free_tickets + high_roller_tickets) AS tickets,
+                       COUNT(DISTINCT user_id) AS entrants
+                  FROM raffle_entries GROUP BY raffle_id
+              ) t ON t.raffle_id = ra.id
+              LEFT JOIN (
+                SELECT raffle_id, COUNT(*) AS prizes_count
+                  FROM prizes GROUP BY raffle_id
+              ) p ON p.raffle_id = ra.id
+              LEFT JOIN (
+                SELECT pr.raffle_id, COUNT(*) AS winners_count
+                  FROM raffle_winners rw
+                  JOIN prizes pr ON pr.id = rw.prize_id
+                 GROUP BY pr.raffle_id
+              ) w ON w.raffle_id = ra.id
+             WHERE ra.drawing_date IN (SELECT drawing_date FROM recent_dates)
+             ORDER BY ra.drawing_date DESC, ra.raffle_type ASC
+        """, (limit,)).fetchall()
+
+        # Group by drawing_date so each row of the index renders with both
+        # raffles together.
+        drawings: list[dict] = []
+        date_idx: dict[str, dict] = {}
+        for r in rows:
+            d = r["drawing_date"]
+            if d not in date_idx:
+                bucket = {
+                    "drawing_date": d,
+                    "standard": None,
+                    "high_roller": None,
+                    "any_open": False,
+                }
+                date_idx[d] = bucket
+                drawings.append(bucket)
+            bucket = date_idx[d]
+            cell = dict(r)
+            cell["remaining"] = (_format_remaining(r["deadline_at"], now)
+                                 if r["status"] != "drawn" else "")
+            bucket[r["raffle_type"]] = cell
+            if r["status"] != "drawn":
+                bucket["any_open"] = True
+
+        featured = drawings[0] if drawings else None
+
+        ctx.update(
+            limit=limit,
+            drawings=drawings,
+            featured=featured,
+            total_drawings=total_drawings,
+        )
+        return templates.TemplateResponse(request, "raffles.html", ctx)
+    finally:
+        conn.close()
+
+
+@app.get("/raffles/{drawing_date}", response_class=HTMLResponse)
+def raffle_detail(request: Request, drawing_date: str):
+    """Per-drawing detail: standard + HR raffles for one Friday, side by side."""
+    # Validate the date format to keep the SQL parameter clean.
+    try:
+        _date.fromisoformat(drawing_date)
+    except ValueError:
+        raise HTTPException(404, f"Bad drawing date: {drawing_date}")
+
+    conn = get_db()
+    try:
+        ctx = site_context(conn)
+        now = ctx["now_utc"]
+
+        raffles = conn.execute("""
+            SELECT id, raffle_type, drawing_date, deadline_at, status,
+                   total_tickets_sold, max_ticket_number, is_backfilled
+              FROM raffles
+             WHERE drawing_date = ?
+             ORDER BY raffle_type ASC
+        """, (drawing_date,)).fetchall()
+        if not raffles:
+            raise HTTPException(404, f"No raffle on {drawing_date}")
+
+        sections = []
+        for ra in raffles:
+            stats = conn.execute("""
+                SELECT COALESCE(SUM(paid_tickets + free_tickets +
+                                    high_roller_tickets), 0) AS tickets,
+                       COUNT(DISTINCT user_id)               AS entrants,
+                       COUNT(*)                              AS entries,
+                       COALESCE(SUM(gold_amount), 0)         AS gold_in
+                  FROM raffle_entries WHERE raffle_id = ?
+            """, (ra["id"],)).fetchone()
+
+            # Prizes joined to winner. Main category before mini, then by
+            # display_order.
+            prizes = conn.execute("""
+                SELECT p.id, p.category, p.display_order,
+                       p.active_at_ticket_count,
+                       p.prize_type, p.gold_amount, p.item_description, p.notes,
+                       u.account_name        AS winner_name,
+                       rw.winning_ticket_number,
+                       rw.drawn_at
+                  FROM prizes p
+                  LEFT JOIN raffle_winners rw ON rw.prize_id = p.id
+                  LEFT JOIN users u ON u.id = rw.user_id
+                 WHERE p.raffle_id = ?
+                 ORDER BY (CASE p.category WHEN 'main' THEN 0 ELSE 1 END),
+                          p.display_order ASC
+            """, (ra["id"],)).fetchall()
+
+            # Top entrants by total tickets in this raffle
+            top_entrants = conn.execute("""
+                SELECT u.account_name,
+                       SUM(re.paid_tickets + re.free_tickets +
+                           re.high_roller_tickets) AS tickets,
+                       SUM(re.paid_tickets) AS paid,
+                       SUM(re.free_tickets) AS free,
+                       SUM(re.high_roller_tickets) AS hr
+                  FROM raffle_entries re
+                  JOIN users u ON u.id = re.user_id
+                 WHERE re.raffle_id = ? AND u.excluded = 0
+                 GROUP BY u.id
+                HAVING tickets > 0
+                 ORDER BY tickets DESC, u.account_name ASC
+                 LIMIT 25
+            """, (ra["id"],)).fetchall()
+
+            ra_dict = dict(ra)
+            ra_dict["remaining"] = (_format_remaining(ra["deadline_at"], now)
+                                    if ra["status"] != "drawn" else "")
+            sections.append({
+                "raffle": ra_dict,
+                "stats": dict(stats) if stats else {
+                    "tickets": 0, "entrants": 0, "entries": 0, "gold_in": 0
+                },
+                "prizes": prizes,
+                "top_entrants": top_entrants,
+            })
+
+        # Adjacent dates for prev/next navigation
+        nav = conn.execute("""
+            SELECT
+              (SELECT MAX(drawing_date) FROM raffles WHERE drawing_date < ?) AS prev_date,
+              (SELECT MIN(drawing_date) FROM raffles WHERE drawing_date > ?) AS next_date
+        """, (drawing_date, drawing_date)).fetchone()
+
+        ctx.update(
+            drawing_date=drawing_date,
+            sections=sections,
+            prev_date=nav["prev_date"] if nav else None,
+            next_date=nav["next_date"] if nav else None,
+        )
+        return templates.TemplateResponse(request, "raffle_detail.html", ctx)
+    finally:
+        conn.close()
+
+
 @app.get("/api/users/search", response_class=HTMLResponse)
 def user_search(request: Request, q: str = Query(default="", min_length=0)):
     """HTMX-friendly dropdown: returns an HTML fragment of matching users."""
@@ -698,19 +899,6 @@ def user_search(request: Request, q: str = Query(default="", min_length=0)):
 
 
 
-
-# --- placeholder routes for pages still under construction -------------------
-# These keep the nav from 404'ing while phase 3.2+ is being built.
-
-@app.get("/raffles", response_class=HTMLResponse)
-def coming_soon(request: Request):
-    conn = get_db()
-    try:
-        ctx = site_context(conn)
-        ctx["page_path"] = request.url.path
-        return templates.TemplateResponse(request, "coming_soon.html", ctx)
-    finally:
-        conn.close()
 
 # --- error handlers ----------------------------------------------------------
 
