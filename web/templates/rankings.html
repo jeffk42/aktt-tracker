@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Rankings · {{ site_title }}{% endblock %}
+{% block content %}
+
+<header class="page-header">
+  <h1>Rankings</h1>
+  <p class="muted">Leaderboards across the guild — {{ period_label }}.</p>
+</header>
+
+<nav class="period-tabs" aria-label="Time period">
+  <a href="?period=current"  class="{% if period == 'current'  %}active{% endif %}">This Week</a>
+  <a href="?period=4w"       class="{% if period == '4w'       %}active{% endif %}">4 Weeks</a>
+  <a href="?period=13w"      class="{% if period == '13w'      %}active{% endif %}">13 Weeks</a>
+  <a href="?period=52w"      class="{% if period == '52w'      %}active{% endif %}">52 Weeks</a>
+  <a href="?period=lifetime" class="{% if period == 'lifetime' %}active{% endif %}">Lifetime</a>
+</nav>
+
+{% macro board(title, rows, fmt='gold', subtitle='') -%}
+<div class="panel board">
+  <h3>{{ title }}</h3>
+  {% if subtitle %}<p class="muted small board-sub">{{ subtitle }}</p>{% endif %}
+  {% if rows %}
+  <ol class="ranked">
+    {% for r in rows %}
+    <li>
+      <a href="/u/{{ r.account_name }}">{{ r.account_name }}</a>
+      <span class="muted">
+        {%- if fmt == 'gold' -%}{{ r.value | gold }}
+        {%- elif fmt == 'count' -%}{{ r.value | intcomma }}
+        {%- else -%}{{ r.value }}
+        {%- endif -%}
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="muted">No data for this period.</p>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+<section class="grid boards">
+  {{ board('Top Sellers',       top_sellers,      subtitle='gold sold via the guild trader') }}
+  {{ board('Top Contributors',  top_contributors, subtitle='taxes + deposits + raffle + donations') }}
+  {{ board('Top Buyers',        top_buyers,       subtitle='gold spent at the guild trader') }}
+  {{ board('Top Item Donors',   top_donors,       subtitle='estimated value of items deposited') }}
+  {{ board('Top Raffle Buyers', top_raffle_spend, subtitle='gold spent on raffle entries') }}
+  {{ board('Most Raffle Wins',  most_wins,        fmt='count', subtitle='prize counts (main + mini)') }}
+  {% if period != 'current' %}
+    {{ board('Most Active',     most_active,      fmt='count', subtitle='weeks with any activity') }}
+  {% endif %}
+</section>
+
+<p class="muted small">
+  Top 25 per category. Ties broken alphabetically.
+  {% if period == 'lifetime' %}
+    Lifetime totals include every recorded week, going back to early 2022.
+  {% elif period == 'current' %}
+    "This week" is the trade week ending {{ current_week_ending.strftime('%b %-d, %Y') }} —
+    numbers update as ingest runs.
+  {% else %}
+    Counts the most recent {{ period[:-1] }} trade weeks ending on or before
+    {{ current_week_ending.strftime('%b %-d, %Y') }}.
+  {% endif %}
+</p>
+
+{% endblock %}

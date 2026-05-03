@@ -43,5 +43,24 @@
     <span class="muted">Trade week ending {{ current_week_ending.strftime('%b %-d, %Y %H:%M UTC') }}
       · {{ time_remaining }} remaining</span>
   </footer>
+
+  <script>
+    // Close the search dropdown when clicking outside the picker, or on Escape.
+    (function() {
+      const picker = document.querySelector('.user-picker');
+      const results = document.getElementById('user-search-results');
+      if (!picker || !results) return;
+      document.addEventListener('click', function(e) {
+        if (!picker.contains(e.target)) results.innerHTML = '';
+      });
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+          results.innerHTML = '';
+          const inp = picker.querySelector('input[name=q]');
+          if (inp) inp.blur();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date as _date
 from pathlib import Path
 from typing import Optional
 
@@ -338,6 +338,344 @@ def personal_stats(request: Request, account_name: str,
         conn.close()
 
 
+# --- rankings helpers --------------------------------------------------------
+
+ALLOWED_PERIODS = ("current", "4w", "13w", "52w", "lifetime")
+_PERIOD_LABELS = {
+    "current": "This Week",
+    "4w": "Last 4 Weeks",
+    "13w": "Last 13 Weeks",
+    "52w": "Last 52 Weeks",
+    "lifetime": "Lifetime",
+}
+_PERIOD_WEEKS = {"4w": 4, "13w": 13, "52w": 52}
+# Day-budget for filtering raffle drawings that don't align cleanly to trade
+# weeks. Roughly N weeks of drawings.
+_PERIOD_DAYS = {"current": 7, "4w": 28, "13w": 91, "52w": 364}
+
+
+def _uws_period_clause(period: str, cur_end: str):
+    """Return (sql_fragment, args) that filters user_week_stats `s` by period.
+    Fragment begins with ' AND' if non-empty so it can be appended to a WHERE."""
+    if period == "current":
+        return (" AND s.week_id = (SELECT id FROM weeks WHERE ending_date = ?)",
+                (cur_end,))
+    if period in _PERIOD_WEEKS:
+        return (" AND s.week_id IN (SELECT id FROM weeks "
+                "WHERE ending_date <= ? ORDER BY ending_date DESC LIMIT ?)",
+                (cur_end, _PERIOD_WEEKS[period]))
+    return "", ()
+
+
+def _drawing_period_clause(period: str, cur_end: str):
+    """Return (sql_fragment, args) that filters raffles `ra` by drawing_date for
+    the period. Day-based, since drawings sit at Friday boundaries while trade
+    weeks roll Tuesday."""
+    if period == "lifetime":
+        return "", ()
+    days = _PERIOD_DAYS[period]
+    cutoff = (datetime.fromisoformat(cur_end) - timedelta(days=days)).date().isoformat()
+    return " AND ra.drawing_date >= ? AND ra.drawing_date <= ?", (cutoff, cur_end)
+
+
+@app.get("/rankings", response_class=HTMLResponse)
+def rankings(request: Request, period: str = Query(default="lifetime")):
+    """Leaderboards across the guild for a chosen period."""
+    if period not in ALLOWED_PERIODS:
+        period = "lifetime"
+    conn = get_db()
+    try:
+        ctx = site_context(conn)
+        cur_end = ctx["current_week_ending"].date().isoformat()
+        wclause, wargs = _uws_period_clause(period, cur_end)
+        dclause, dargs = _drawing_period_clause(period, cur_end)
+
+        def _board(metric_sql: str, limit: int = 25):
+            sql = f"""
+                SELECT u.account_name, ({metric_sql}) AS value
+                  FROM user_week_stats s
+                  JOIN users u ON u.id = s.user_id
+                 WHERE u.excluded = 0 {wclause}
+                 GROUP BY u.id
+                HAVING value > 0
+                 ORDER BY value DESC, u.account_name ASC
+                 LIMIT {int(limit)}
+            """
+            return conn.execute(sql, wargs).fetchall()
+
+        top_sellers      = _board("SUM(s.sales)")
+        top_contributors = _board(
+            "SUM(s.taxes + s.total_deposits + s.total_raffle + s.total_donations)"
+        )
+        top_buyers       = _board("SUM(s.purchases)")
+        top_donors       = _board("SUM(s.total_donations)")
+        top_raffle_spend = _board("SUM(s.total_raffle)")
+
+        # Most active: weeks-with-activity in the period. Meaningless for a
+        # single-week view, so only computed for multi-week periods.
+        most_active = []
+        if period != "current":
+            active_sql = f"""
+                SELECT u.account_name, COUNT(*) AS value
+                  FROM user_week_stats s
+                  JOIN users u ON u.id = s.user_id
+                 WHERE u.excluded = 0 {wclause}
+                   AND (s.sales + s.taxes + s.purchases + s.total_deposits +
+                        s.total_donations + s.total_raffle) > 0
+                 GROUP BY u.id
+                HAVING value > 0
+                 ORDER BY value DESC, u.account_name ASC
+                 LIMIT 25
+            """
+            most_active = conn.execute(active_sql, wargs).fetchall()
+
+        # Most raffle wins (count of prizes won). Joined raffles->prizes->winners.
+        wins_sql = f"""
+            SELECT u.account_name, COUNT(*) AS value
+              FROM raffle_winners rw
+              JOIN prizes p  ON p.id  = rw.prize_id
+              JOIN raffles ra ON ra.id = p.raffle_id
+              JOIN users u   ON u.id  = rw.user_id
+             WHERE u.excluded = 0 {dclause}
+             GROUP BY u.id
+            HAVING value > 0
+             ORDER BY value DESC, u.account_name ASC
+             LIMIT 25
+        """
+        most_wins = conn.execute(wins_sql, dargs).fetchall()
+
+        ctx.update(
+            period=period,
+            period_label=_PERIOD_LABELS[period],
+            top_sellers=top_sellers,
+            top_contributors=top_contributors,
+            top_buyers=top_buyers,
+            top_donors=top_donors,
+            top_raffle_spend=top_raffle_spend,
+            most_active=most_active,
+            most_wins=most_wins,
+        )
+        return templates.TemplateResponse(request, "rankings.html", ctx)
+    finally:
+        conn.close()
+
+
+@app.get("/traders", response_class=HTMLResponse)
+def traders(request: Request, limit: int = Query(default=26, ge=4, le=9999)):
+    """Guild trader history. Bid amounts are intentionally NOT exposed
+    (officer-only info per design). Shows current trader, recent history,
+    most-frequent locations and NPCs, plus aggregate counts."""
+    conn = get_db()
+    try:
+        ctx = site_context(conn)
+        cur_end = ctx["current_week_ending"].date().isoformat()
+
+        current = conn.execute("""
+            SELECT gt.trader_name, gt.location, gt.notes, w.ending_date
+              FROM guild_traders gt JOIN weeks w ON w.id = gt.week_id
+             WHERE w.ending_date = ?
+        """, (cur_end,)).fetchone()
+
+        # Most-recent trader BEFORE the current week, for context.
+        previous = conn.execute("""
+            SELECT gt.trader_name, gt.location, w.ending_date
+              FROM guild_traders gt JOIN weeks w ON w.id = gt.week_id
+             WHERE w.ending_date < ?
+             ORDER BY w.ending_date DESC LIMIT 1
+        """, (cur_end,)).fetchone()
+
+        history = conn.execute("""
+            SELECT w.ending_date, gt.trader_name, gt.location, gt.notes
+              FROM guild_traders gt JOIN weeks w ON w.id = gt.week_id
+             ORDER BY w.ending_date DESC
+             LIMIT ?
+        """, (limit,)).fetchall()
+
+        agg = conn.execute("""
+            SELECT COUNT(*)                       AS total_won,
+                   COUNT(DISTINCT location)       AS distinct_locations,
+                   COUNT(DISTINCT trader_name)    AS distinct_traders,
+                   MIN(w.ending_date)             AS first_week,
+                   MAX(w.ending_date)             AS latest_week
+              FROM guild_traders gt JOIN weeks w ON w.id = gt.week_id
+        """).fetchone()
+        agg_dict = dict(agg) if agg else {
+            "total_won": 0, "distinct_locations": 0, "distinct_traders": 0,
+            "first_week": None, "latest_week": None,
+        }
+
+        # Win rate: weeks-won / weeks-since-first-recorded-win.
+        win_rate = None
+        weeks_in_range = None
+        if agg_dict["first_week"]:
+            first_d = _date.fromisoformat(agg_dict["first_week"])
+            cur_d   = _date.fromisoformat(cur_end)
+            weeks_in_range = ((cur_d - first_d).days // 7) + 1
+            if weeks_in_range > 0:
+                win_rate = agg_dict["total_won"] / weeks_in_range
+
+        top_locations = conn.execute("""
+            SELECT location, COUNT(*) AS weeks
+              FROM guild_traders
+             WHERE location IS NOT NULL AND TRIM(location) != ''
+             GROUP BY location
+             ORDER BY weeks DESC, location ASC
+             LIMIT 15
+        """).fetchall()
+
+        top_traders = conn.execute("""
+            SELECT trader_name, COUNT(*) AS weeks
+              FROM guild_traders
+             WHERE trader_name IS NOT NULL AND TRIM(trader_name) != ''
+             GROUP BY trader_name
+             ORDER BY weeks DESC, trader_name ASC
+             LIMIT 15
+        """).fetchall()
+
+        ctx.update(
+            current=current, previous=previous,
+            history=history, limit=limit,
+            agg=agg_dict, win_rate=win_rate, weeks_in_range=weeks_in_range,
+            top_locations=top_locations, top_traders=top_traders,
+        )
+        return templates.TemplateResponse(request, "traders.html", ctx)
+    finally:
+        conn.close()
+
+
+@app.get("/trends", response_class=HTMLResponse)
+def trends(request: Request, limit: int = Query(default=104, ge=8, le=9999)):
+    """Guild-wide activity over time. Aggregates per completed trade week,
+    plus per-raffle ticket counts. The currently in-progress trade week is
+    excluded from the per-week series so partial data doesn't pull the right
+    end of every chart down."""
+    conn = get_db()
+    try:
+        ctx = site_context(conn)
+        cur_end = ctx["current_week_ending"].date().isoformat()
+        # Cutoff for raffle-side window (calendar-day approximation of N weeks).
+        cutoff = (_date.fromisoformat(cur_end) - timedelta(weeks=limit)).isoformat()
+
+        # Per-week aggregates excluding the in-progress current week.
+        weekly = conn.execute("""
+            WITH visible AS (
+              SELECT id FROM weeks
+               WHERE ending_date < ?
+               ORDER BY ending_date DESC LIMIT ?
+            )
+            SELECT w.ending_date,
+                   SUM(s.sales)            AS sales,
+                   SUM(s.taxes)            AS taxes,
+                   SUM(s.purchases)        AS purchases,
+                   SUM(s.total_deposits)   AS deposits,
+                   SUM(s.total_raffle)     AS raffle,
+                   SUM(s.total_donations)  AS donations,
+                   COUNT(DISTINCT CASE
+                      WHEN (s.sales + s.taxes + s.purchases + s.total_deposits +
+                            s.total_donations + s.total_raffle) > 0
+                      THEN s.user_id END)  AS active_members
+              FROM user_week_stats s
+              JOIN users u ON u.id = s.user_id
+              JOIN weeks w ON w.id = s.week_id
+             WHERE u.excluded = 0
+               AND w.id IN (SELECT id FROM visible)
+             GROUP BY w.id
+             ORDER BY w.ending_date ASC
+        """, (cur_end, limit)).fetchall()
+
+        # 52-week trailing totals for the headline cards.
+        trailing_row = conn.execute("""
+            SELECT COALESCE(SUM(s.sales), 0)            AS total_sales,
+                   COALESCE(SUM(s.taxes + s.total_deposits +
+                                s.total_raffle + s.total_donations), 0)
+                                                       AS total_contribution,
+                   COALESCE(SUM(s.purchases), 0)       AS total_purchases,
+                   COALESCE(SUM(s.total_donations), 0) AS total_donations
+              FROM user_week_stats s
+              JOIN users u ON u.id = s.user_id
+             WHERE u.excluded = 0
+               AND s.week_id IN (
+                  SELECT id FROM weeks
+                   WHERE ending_date < ?
+                   ORDER BY ending_date DESC LIMIT 52
+               )
+        """, (cur_end,)).fetchone()
+        trailing = dict(trailing_row) if trailing_row else {
+            "total_sales": 0, "total_contribution": 0,
+            "total_purchases": 0, "total_donations": 0,
+        }
+
+        # Live (partial-week) active member count.
+        cur_active_row = conn.execute("""
+            SELECT COUNT(*) AS n
+              FROM user_week_stats s
+              JOIN users u ON u.id = s.user_id
+             WHERE s.week_id = (SELECT id FROM weeks WHERE ending_date = ?)
+               AND u.excluded = 0
+               AND (s.sales + s.taxes + s.purchases + s.total_deposits +
+                    s.total_donations + s.total_raffle) > 0
+        """, (cur_end,)).fetchone()
+        cur_active = cur_active_row["n"] if cur_active_row else 0
+
+        # Per-raffle ticket counts. Drawn raffles only — open ones have partial
+        # data and would draw misleading spikes at the right edge.
+        raffles = conn.execute("""
+            SELECT ra.drawing_date,
+                   ra.raffle_type,
+                   COALESCE(SUM(re.paid_tickets + re.free_tickets +
+                                re.high_roller_tickets), 0) AS tickets,
+                   COUNT(DISTINCT re.user_id) AS entrants
+              FROM raffles ra
+              LEFT JOIN raffle_entries re ON re.raffle_id = ra.id
+             WHERE ra.status = 'drawn'
+               AND ra.drawing_date >= ?
+             GROUP BY ra.id
+             ORDER BY ra.drawing_date ASC
+        """, (cutoff,)).fetchall()
+
+        weekly_chart = [{
+            "ending_date": r["ending_date"],
+            "sales":     r["sales"]     or 0,
+            "taxes":     r["taxes"]     or 0,
+            "purchases": r["purchases"] or 0,
+            "deposits":  r["deposits"]  or 0,
+            "raffle":    r["raffle"]    or 0,
+            "donations": r["donations"] or 0,
+            "active_members": r["active_members"] or 0,
+        } for r in weekly]
+
+        std_raffle_data = [{
+            "date":     r["drawing_date"],
+            "tickets":  r["tickets"],
+            "entrants": r["entrants"],
+        } for r in raffles if r["raffle_type"] == "standard"]
+        hr_raffle_data = [{
+            "date":     r["drawing_date"],
+            "tickets":  r["tickets"],
+            "entrants": r["entrants"],
+        } for r in raffles if r["raffle_type"] == "high_roller"]
+
+        # Total weeks available, for the "show all" link math.
+        total_weeks_row = conn.execute(
+            "SELECT COUNT(*) AS n FROM weeks WHERE ending_date < ?",
+            (cur_end,)
+        ).fetchone()
+        total_weeks = total_weeks_row["n"] if total_weeks_row else 0
+
+        ctx.update(
+            limit=limit,
+            weekly_chart=weekly_chart,
+            std_raffle_data=std_raffle_data,
+            hr_raffle_data=hr_raffle_data,
+            trailing_52w=trailing,
+            cur_active=cur_active,
+            total_weeks=total_weeks,
+        )
+        return templates.TemplateResponse(request, "trends.html", ctx)
+    finally:
+        conn.close()
+
+
 @app.get("/api/users/search", response_class=HTMLResponse)
 def user_search(request: Request, q: str = Query(default="", min_length=0)):
     """HTMX-friendly dropdown: returns an HTML fragment of matching users."""
@@ -364,10 +702,7 @@ def user_search(request: Request, q: str = Query(default="", min_length=0)):
 # --- placeholder routes for pages still under construction -------------------
 # These keep the nav from 404'ing while phase 3.2+ is being built.
 
-@app.get("/rankings", response_class=HTMLResponse)
 @app.get("/raffles", response_class=HTMLResponse)
-@app.get("/traders", response_class=HTMLResponse)
-@app.get("/trends", response_class=HTMLResponse)
 def coming_soon(request: Request):
     conn = get_db()
     try:

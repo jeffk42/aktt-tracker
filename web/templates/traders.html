@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Traders · {{ site_title }}{% endblock %}
+{% block content %}
+
+<header class="page-header">
+  <h1>Guild Traders</h1>
+  <p class="muted">Where AKTT has won a trader spot, week by week.</p>
+</header>
+
+<section class="cards">
+  <div class="card">
+    <h3 class="card-title">Current Trader</h3>
+    {% if current %}
+      <p class="big">{{ current.trader_name }}</p>
+      <p class="muted">{{ current.location or '—' }}</p>
+    {% elif previous %}
+      <p class="big muted">No trader this week</p>
+      <p class="muted">last won: {{ previous.trader_name }} ({{ previous.ending_date | nicedate }})</p>
+    {% else %}
+      <p class="big muted">No trader this week</p>
+      <p class="muted">Bid didn't win, or not yet recorded</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h3 class="card-title">Weeks Won</h3>
+    <p class="big">{{ agg.total_won | intcomma }}</p>
+    {% if win_rate is not none %}
+      <p class="muted">{{ win_rate | pct }} of {{ weeks_in_range }} weeks tracked</p>
+    {% else %}
+      <p class="muted">since records began</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h3 class="card-title">Distinct Locations</h3>
+    <p class="big">{{ agg.distinct_locations | intcomma }}</p>
+    <p class="muted">{{ agg.distinct_traders }} unique NPCs</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">First Recorded Win</h3>
+    {% if agg.first_week %}
+      <p class="big">{{ agg.first_week | nicedate }}</p>
+      <p class="muted">latest: {{ agg.latest_week | nicedate }}</p>
+    {% else %}
+      <p class="big muted">—</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="grid two">
+  <div class="panel">
+    <h3>Most-frequent locations</h3>
+    {% if top_locations %}
+    <ol class="ranked">
+      {% for r in top_locations %}
+      <li>
+        <span>{{ r.location }}</span>
+        <span class="muted">{{ r.weeks }} {{ 'week' if r.weeks == 1 else 'weeks' }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}<p class="muted">No data yet.</p>{% endif %}
+  </div>
+  <div class="panel">
+    <h3>Most-frequent NPCs</h3>
+    {% if top_traders %}
+    <ol class="ranked">
+      {% for r in top_traders %}
+      <li>
+        <span>{{ r.trader_name }}</span>
+        <span class="muted">{{ r.weeks }} {{ 'week' if r.weeks == 1 else 'weeks' }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}<p class="muted">No data yet.</p>{% endif %}
+  </div>
+</section>
+
+<section class="panel wide">
+  <h3>Recent history</h3>
+  <p class="muted small">
+    Showing the most recent {{ history | length }} winning weeks
+    {% if history | length >= limit and agg.total_won > limit %}
+      {% set next_limit = (limit + 26) if (limit + 26) < agg.total_won else agg.total_won %}
+      (capped at {{ limit }};
+      <a href="?limit={{ next_limit }}">show {{ next_limit }}</a>
+      &nbsp;·&nbsp;
+      <a href="?limit={{ agg.total_won }}">show all {{ agg.total_won }}</a>)
+    {% endif %}
+  </p>
+  <div class="table-wrap">
+    <table class="data sortable">
+      <thead>
+        <tr>
+          <th>Week Ending</th>
+          <th>Location</th>
+          <th>Trader</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in history %}
+        <tr>
+          <td>{{ r.ending_date | nicedate }}</td>
+          <td>{{ r.location or '—' }}</td>
+          <td>{{ r.trader_name }}</td>
+          <td>{{ r.notes or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted small">Bid amounts are not displayed publicly.</p>
+</section>
+
+{% endblock %}

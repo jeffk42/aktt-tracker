@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}Trends · {{ site_title }}{% endblock %}
+{% block content %}
+
+<header class="page-header">
+  <h1>Trends</h1>
+  <p class="muted">Guild-wide activity over time. Charts show completed trade weeks only —
+    the in-progress current week is excluded so partial data doesn't distort the trend.</p>
+</header>
+
+<section class="cards">
+  <div class="card">
+    <h3 class="card-title">Sales (52w)</h3>
+    <p class="big">{{ trailing_52w.total_sales | gold }}</p>
+    <p class="muted">past 52 completed weeks</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">Contribution (52w)</h3>
+    <p class="big">{{ trailing_52w.total_contribution | gold }}</p>
+    <p class="muted">taxes + deposits + raffle + donations</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">Active Members</h3>
+    <p class="big">{{ cur_active | intcomma }}</p>
+    <p class="muted">contributing this week</p>
+  </div>
+  <div class="card">
+    <h3 class="card-title">Item Donations (52w)</h3>
+    <p class="big">{{ trailing_52w.total_donations | gold }}</p>
+    <p class="muted">est. value of bank-deposited items</p>
+  </div>
+</section>
+
+<p class="muted small">
+  Showing the most recent {{ weekly_chart | length }} completed weeks.
+  {% if weekly_chart | length >= limit and total_weeks > limit %}
+    {% set next_limit = (limit + 52) if (limit + 52) < total_weeks else total_weeks %}
+    (capped at {{ limit }};
+    <a href="?limit={{ next_limit }}">show {{ next_limit }}</a>
+    &nbsp;·&nbsp;
+    <a href="?limit={{ total_weeks }}">show all {{ total_weeks }}</a>)
+  {% endif %}
+</p>
+
+{% if weekly_chart %}
+<section class="panel wide">
+  <h3>Weekly sales</h3>
+  <canvas id="salesChart" height="100"></canvas>
+</section>
+
+<section class="panel wide">
+  <h3>Weekly contribution composition</h3>
+  <canvas id="contribChart" height="100"></canvas>
+</section>
+
+<section class="panel wide">
+  <h3>Active members per week</h3>
+  <canvas id="activeChart" height="80"></canvas>
+</section>
+{% else %}
+<section class="panel">
+  <p class="muted">No completed-week data yet.</p>
+</section>
+{% endif %}
+
+{% if std_raffle_data or hr_raffle_data %}
+<section class="panel wide">
+  <h3>Raffle tickets sold per drawing</h3>
+  <canvas id="raffleChart" height="100"></canvas>
+  <p class="muted small">
+    Standard raffle (gold) reads against the left axis;
+    high-roller raffle (red) reads against the right axis.
+    Two scales because standard sells thousands of tickets per drawing while
+    high-roller is typically single or double digits — sharing one axis would
+    flatten the HR line. Drawn raffles only.
+  </p>
+</section>
+{% endif %}
+
+<script>
+  const weeklyData  = {{ weekly_chart    | tojson }};
+  const stdRaffles  = {{ std_raffle_data | tojson }};
+  const hrRaffles   = {{ hr_raffle_data  | tojson }};
+
+  const axisColor = '#8b949e';
+  const gridColor = '#21262d';
+  const legendColor = '#c9d1d9';
+  const goldFmt = v => v.toLocaleString() + 'g';
+  const intFmt  = v => v.toLocaleString();
+
+  const baseScales = (yFmt) => ({
+    x: { ticks: { color: axisColor, maxTicksLimit: 12 }, grid: { color: gridColor } },
+    y: { ticks: { color: axisColor, callback: yFmt }, grid: { color: gridColor }, beginAtZero: true }
+  });
+
+  if (weeklyData.length) {
+    const labels = weeklyData.map(r => r.ending_date);
+
+    new Chart(document.getElementById('salesChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Total sales',
+          data: weeklyData.map(r => r.sales),
+          borderColor: '#fbbc04',
+          backgroundColor: 'rgba(251,188,4,0.15)',
+          tension: 0.25, pointRadius: 1, fill: true,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: legendColor } } },
+        scales: baseScales(goldFmt),
+      }
+    });
+
+    new Chart(document.getElementById('contribChart'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Taxes',     data: weeklyData.map(r => r.taxes),     backgroundColor: '#7ee787' },
+          { label: 'Deposits',  data: weeklyData.map(r => r.deposits),  backgroundColor: '#79c0ff' },
+          { label: 'Raffle',    data: weeklyData.map(r => r.raffle),    backgroundColor: '#fbbc04' },
+          { label: 'Donations', data: weeklyData.map(r => r.donations), backgroundColor: '#d2a8ff' },
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: legendColor } } },
+        scales: {
+          x: { stacked: true, ticks: { color: axisColor, maxTicksLimit: 12 }, grid: { color: gridColor } },
+          y: { stacked: true, ticks: { color: axisColor, callback: goldFmt }, grid: { color: gridColor }, beginAtZero: true }
+        }
+      }
+    });
+
+    new Chart(document.getElementById('activeChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Active members',
+          data: weeklyData.map(r => r.active_members),
+          borderColor: '#79c0ff',
+          backgroundColor: 'rgba(121,192,255,0.15)',
+          tension: 0.25, pointRadius: 1, fill: true,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: legendColor } } },
+        scales: baseScales(intFmt),
+      }
+    });
+  }
+
+  if (stdRaffles.length || hrRaffles.length) {
+    // Build a unified date axis covering all drawings.
+    const allDates = Array.from(new Set([
+      ...stdRaffles.map(r => r.date),
+      ...hrRaffles.map(r => r.date),
+    ])).sort();
+    const stdMap = new Map(stdRaffles.map(r => [r.date, r.tickets]));
+    const hrMap  = new Map(hrRaffles .map(r => [r.date, r.tickets]));
+
+    // Two y-axes: standard tickets on left, high-roller on right. Without
+    // this, the HR line gets flattened to invisibility against the much
+    // larger standard-ticket scale.
+    new Chart(document.getElementById('raffleChart'), {
+      type: 'line',
+      data: {
+        labels: allDates,
+        datasets: [
+          {
+            label: 'Standard raffle (tickets)',
+            data: allDates.map(d => stdMap.has(d) ? stdMap.get(d) : null),
+            borderColor: '#fbbc04',
+            backgroundColor: 'rgba(251,188,4,0.15)',
+            tension: 0.25, pointRadius: 2, fill: false,
+            spanGaps: true,
+            yAxisID: 'yStd',
+          },
+          {
+            label: 'High-roller raffle (tickets)',
+            data: allDates.map(d => hrMap.has(d) ? hrMap.get(d) : null),
+            borderColor: '#ff7b72',
+            backgroundColor: 'rgba(255,123,114,0.15)',
+            tension: 0.25, pointRadius: 2, fill: false,
+            spanGaps: true,
+            yAxisID: 'yHR',
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { labels: { color: legendColor } } },
+        scales: {
+          x: {
+            ticks: { color: axisColor, maxTicksLimit: 12 },
+            grid:  { color: gridColor },
+          },
+          yStd: {
+            type: 'linear', position: 'left',
+            beginAtZero: true,
+            title: { display: true, text: 'Standard tickets', color: '#fbbc04' },
+            ticks: { color: '#fbbc04', callback: intFmt },
+            grid:  { color: gridColor },
+          },
+          yHR: {
+            type: 'linear', position: 'right',
+            beginAtZero: true,
+            title: { display: true, text: 'HR tickets', color: '#ff7b72' },
+            ticks: { color: '#ff7b72', callback: intFmt },
+            // Right axis: no gridlines, so the two grids don't double up.
+            grid:  { drawOnChartArea: false },
+          }
+        }
+      }
+    });
+  }
+</script>
+
+{% endblock %}

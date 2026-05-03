@@ -155,6 +155,45 @@ a:hover { color: var(--gold-dim); text-decoration: underline; }
 .grid { display: grid; gap: 1rem; margin-bottom: 1.5rem; }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 
+/* --- period tabs (pill row) --------------------------------------------- */
+
+.period-tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin: -0.5rem 0 1.2rem 0;
+  flex-wrap: wrap;
+}
+.period-tabs a {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 500;
+  line-height: 1;
+}
+.period-tabs a:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+  text-decoration: none;
+}
+.period-tabs a.active {
+  background: var(--gold);
+  color: var(--bg);
+  border-color: var(--gold);
+}
+.period-tabs a.active:hover { color: var(--bg); }
+
+/* --- boards grid (rankings) --------------------------------------------- */
+
+.grid.boards {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+.panel.board { display: flex; flex-direction: column; }
+.panel.board h3 { margin-bottom: 0.25rem; }
+.board-sub { margin: 0 0 0.6rem 0; }
+
 /* --- ranked lists -------------------------------------------------------- */
 
 .ranked { list-style: none; padding: 0; margin: 0; counter-reset: rank; }
